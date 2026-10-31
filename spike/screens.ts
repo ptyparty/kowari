@@ -76,7 +76,8 @@ try {
   await session(0, async (s) => {
     await shoot(s, "tui-connections");
     s.mockInput.pressEnter();
-    await until(s, (f) => f.includes("LOCAL"));
+    await until(s, (f) => f.includes("LOCAL") && !f.includes("reading the catalog"));
+    s.mockInput.pressKey("i");
     await s.mockInput.typeText(
       "select s.id, s.status, c.name as carrier, s.details, s.created_at\nfrom shipment s\njoin carrier c on c.code = s.carrier\nwhere s.status is distinct from 'delivered' -- open ones\norder by s.created_at desc;",
     );
@@ -96,7 +97,8 @@ try {
 
   await session(0, async (s) => {
     s.mockInput.pressEnter();
-    await until(s, (f) => f.includes("LOCAL"));
+    await until(s, (f) => f.includes("LOCAL") && !f.includes("reading the catalog"));
+    s.mockInput.pressKey("i");
     const tail = " from shipment s\njoin carrier c on c.code = s.carrier\nwhere s.";
     await s.mockInput.typeText(`select${tail}`);
     await until(s, (f) => /col\s+status/.test(f));
@@ -111,9 +113,30 @@ try {
     await shoot(s, "tui-complete-alias");
   });
 
+  await session(0, async (s) => {
+    s.mockInput.pressEnter();
+    await until(s, (f) => f.includes("LOCAL") && !f.includes("reading the catalog"));
+    s.mockInput.pressKey("i");
+    await s.mockInput.typeText("select s.id, s.status\nfrom shipment s\nwhere s.carrier = 'maersk'\n  and s.status is not null;");
+    await Bun.sleep(50);
+    s.mockInput.pressEscape();
+    s.mockInput.pressKey("k");
+    s.mockInput.pressKey("g");
+    s.mockInput.pressKey("h");
+    s.mockInput.pressKey("w");
+    s.mockInput.pressKey("v");
+    s.mockInput.pressKey("f");
+    s.mockInput.pressKey("'");
+    s.mockInput.pressKey("f");
+    s.mockInput.pressKey("'");
+    await until(s, (f) => f.includes(" EXT "));
+    await shoot(s, "tui-helix-select");
+  });
+
   await session(2, async (s) => {
     s.mockInput.pressEnter();
     await until(s, (f) => f.includes("TESTING"));
+    s.mockInput.pressKey("i");
     await s.mockInput.typeText("select carrier, count(*) from shipment group by 1 order by 2 desc");
     s.mockInput.pressEnter({ ctrl: true });
     await until(s, (f) => f.includes("4 rows"));
@@ -123,6 +146,7 @@ try {
   await session(3, async (s) => {
     s.mockInput.pressEnter();
     await until(s, (f) => f.includes("PRODUCTION"));
+    s.mockInput.pressKey("i");
     await s.mockInput.typeText("select nope from shipment");
     s.mockInput.pressEnter({ ctrl: true });
     await until(s, (f) => f.includes("Error"));

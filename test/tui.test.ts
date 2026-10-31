@@ -68,9 +68,11 @@ async function settled(s: TestRendererSetup): Promise<string> {
   return s.captureCharFrame();
 }
 
-async function connectFirst(s: TestRendererSetup): Promise<void> {
+async function connectFirst(s: TestRendererSetup): Promise<string> {
   s.mockInput.pressEnter();
   await until(s, (f) => f.includes("LOCAL · local") && !f.includes("reading the catalog"));
+  s.mockInput.pressKey("i");
+  return until(s, (f) => f.includes(" INS "));
 }
 
 describe("kowari TUI", () => {
@@ -88,8 +90,7 @@ describe("kowari TUI", () => {
 
   test("connects, runs the statement under the cursor with Ctrl-Enter, and shows the grid", async () => {
     const s = await open([connection("local", "local")]);
-    s.mockInput.pressEnter();
-    let frame = await until(s, (f) => f.includes("LOCAL · local"));
+    let frame = await connectFirst(s);
     expect(frame).toContain("shipment");
 
     await s.mockInput.typeText("select 1 as one;\nselect id, status from shipment order by id");
@@ -102,8 +103,7 @@ describe("kowari TUI", () => {
 
   test("Ctrl-Enter runs the statement the cursor is on, even after wide characters", async () => {
     const s = await open([connection("local", "local")]);
-    s.mockInput.pressEnter();
-    await until(s, (f) => f.includes("LOCAL · local"));
+    await connectFirst(s);
     await s.mockInput.typeText("select '日本' as wide;\nselect id from shipment where id = 2 or id = 1");
     s.mockInput.pressArrow("up");
     s.mockInput.pressEnter({ ctrl: true });
@@ -114,8 +114,7 @@ describe("kowari TUI", () => {
 
   test("Enter on a table adds a select after what is in the editor and runs it", async () => {
     const s = await open([connection("local", "local")]);
-    s.mockInput.pressEnter();
-    await until(s, (f) => f.includes("LOCAL · local"));
+    await connectFirst(s);
     await s.mockInput.typeText("select 42 as kept;");
     s.mockInput.pressTab();
     s.mockInput.pressTab();
@@ -202,10 +201,61 @@ describe("kowari TUI", () => {
     expect(frame).not.toMatch(/tbl\s+victim/);
   });
 
-  test("opens a JSON cell pretty-printed", async () => {
+  test("helix: normal mode edits by selection, insert mode types", async () => {
     const s = await open([connection("local", "local")]);
     s.mockInput.pressEnter();
-    await until(s, (f) => f.includes("LOCAL · local"));
+    await until(s, (f) => f.includes(" NOR "));
+    await s.mockInput.typeText("xyz");
+    expect(app!.text).toBe("");
+
+    s.mockInput.pressKey("i");
+    await s.mockInput.typeText("select '日本' as wide;\nselect 2;");
+    await Bun.sleep(50);
+    s.mockInput.pressEscape();
+    await until(s, (f) => f.includes(" NOR "));
+    s.mockInput.pressKey("x");
+    s.mockInput.pressKey("d");
+    await until(s, () => app!.text === "select '日本' as wide;\n");
+
+    s.mockInput.pressKey("k");
+    s.mockInput.pressKey("g");
+    s.mockInput.pressKey("h");
+    for (const k of ["w", "w", "w", "w", "w"]) s.mockInput.pressKey(k);
+    s.mockInput.pressKey("e");
+    s.mockInput.pressKey("c");
+    await until(s, (f) => f.includes(" INS "));
+    await s.mockInput.typeText("narrow");
+    await Bun.sleep(50);
+    s.mockInput.pressEscape();
+    await until(s, () => app!.text === "select '日本' as narrow;\n");
+
+    s.mockInput.pressKey("u");
+    await until(s, () => app!.text.includes("wide"));
+  });
+
+  test("helix: one Esc closes the completion popup and leaves insert mode", async () => {
+    const s = await open([connection("local", "local")]);
+    await connectFirst(s);
+    await s.mockInput.typeText("select * from sh");
+    await until(s, (f) => /tbl\s+shipment/.test(f));
+    s.mockInput.pressEscape();
+    const frame = await until(s, (f) => f.includes(" NOR "));
+    expect(frame).not.toMatch(/tbl\s+shipment/);
+  });
+
+  test("helix: a paste in normal mode goes in at the cursor and can be undone", async () => {
+    const s = await open([connection("local", "local")]);
+    s.mockInput.pressEnter();
+    await until(s, (f) => f.includes(" NOR "));
+    await s.mockInput.pasteBracketedText("select 1;");
+    await until(s, () => app!.text === "select 1;");
+    s.mockInput.pressKey("u");
+    await until(s, () => app!.text === "");
+  });
+
+  test("opens a JSON cell pretty-printed", async () => {
+    const s = await open([connection("local", "local")]);
+    await connectFirst(s);
     await s.mockInput.typeText("select details from shipment where id = 1");
     s.mockInput.pressEnter({ ctrl: true });
     await until(s, (f) => f.includes("1 row"));
@@ -219,8 +269,7 @@ describe("kowari TUI", () => {
 
   test("shows SQL errors in the results pane", async () => {
     const s = await open([connection("local", "local")]);
-    s.mockInput.pressEnter();
-    await until(s, (f) => f.includes("LOCAL · local"));
+    await connectFirst(s);
     await s.mockInput.typeText("select nope from shipment");
     s.mockInput.pressEnter({ ctrl: true });
     const frame = await until(s, (f) => f.includes("Error ·"));

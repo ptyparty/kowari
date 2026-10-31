@@ -3,12 +3,14 @@ import {
   bold,
   BoxRenderable,
   fg,
+  RGBA,
   StyledText,
   SyntaxStyle,
   TextareaRenderable,
   TextRenderable,
   type CliRenderer,
   type KeyEvent,
+  type PasteEvent,
   type TextChunk,
 } from "@opentui/core";
 import { listTables } from "../agent/catalog.ts";
@@ -20,8 +22,12 @@ import { quoteIdent } from "../sql/ident.ts";
 import { statementAt, statementText } from "../sql/statements.ts";
 import { scan, type TokenKind } from "../sql/tokens.ts";
 import { Database, type Run } from "./database.ts";
+import { Helix, type Mode } from "./helix.ts";
 import { clamp, layoutGrid, moveCursor, type GridCursor, type Line, type Rows } from "./grid.ts";
 import { environmentColor, levelColor, theme } from "./theme.ts";
+
+const selectionBg = RGBA.fromHex(theme.selection);
+const selectionFg = RGBA.fromHex(theme.text);
 
 export type AppOptions = {
   resolve: () => Promise<Resolution>;
@@ -88,6 +94,7 @@ export class App {
   private popup: Popup | null = null;
   private acceptedText: string | null = null;
   private userRunning = false;
+  private readonly helix: Helix;
 
   constructor(
     private readonly renderer: CliRenderer,
@@ -152,8 +159,29 @@ export class App {
         this.completeAfterEdit();
       },
       onCursorChange: () => this.cursorMoved(),
+      cursorStyle: { style: "block", blinking: false },
     });
     this.editorBox.add(this.editor);
+    this.helix = new Helix({
+      text: () => this.editor.plainText,
+      cursor: () => this.cursorIndex(this.editor.plainText),
+      setCursor: (index) => {
+        const at = this.position(this.editor.plainText, index);
+        this.editor.editBuffer.setCursor(at.row, at.col);
+      },
+      showSelection: (start, end) => {
+        const text = this.editor.plainText;
+        this.editor.editorView.setSelection(this.offsetOf(text, start), this.offsetOf(text, end), selectionBg, selectionFg);
+      },
+      clearSelection: () => this.editor.editorView.resetSelection(),
+      replace: (start, end, insert) => this.replaceRange(start, end, insert),
+      restore: (text) => {
+        this.editor.editBuffer.replaceText(text);
+        this.highlight();
+      },
+      measure: (text) => this.editor.editBuffer.measureText(text),
+      modeChanged: (mode) => this.modeChanged(mode),
+    });
     this.resultsBox = pane(renderer, "Results", { height: "55%", onSizeChange: () => this.renderResults() });
     this.resultsText = new TextRenderable(renderer, { content: "", wrapMode: "none", flexGrow: 1 });
     this.resultsBox.add(this.resultsText);
@@ -188,11 +216,13 @@ export class App {
 
   async start(): Promise<void> {
     this.renderer.keyInput.on("keypress", this.onKey);
+    this.renderer.keyInput.on("paste", this.onPaste);
     await this.reload();
   }
 
   async stop(): Promise<void> {
     this.renderer.keyInput.off("keypress", this.onKey);
+    this.renderer.keyInput.off("paste", this.onPaste);
     await this.connected?.db.close();
     this.connected = null;
   }
@@ -205,6 +235,7 @@ export class App {
     this.editor.editBuffer.setText(text);
     this.moveCursorToEnd();
     this.highlight();
+    this.helix.reset();
   }
 
   private moveCursorToEnd(): void {
@@ -218,6 +249,13 @@ export class App {
     this.connectionIndex = Math.min(this.connectionIndex, Math.max(0, this.resolution.connections.length - 1));
     this.renderAll();
   }
+
+  private readonly onPaste = (event: PasteEvent): void => {
+    if (this.screen !== "workspace" || this.focus !== "editor" || this.helix.mode !== "normal") return;
+    event.preventDefault();
+    this.helix.pasteText(new TextDecoder().decode(event.bytes).replaceAll("\r\n", "\n").replaceAll("\r", "\n"));
+    this.highlight();
+  };
 
   private readonly onKey = (key: KeyEvent): void => {
     if (key.ctrl && key.name === "q") {
@@ -253,13 +291,20 @@ export class App {
       void this.runStatementUnderCursor();
       return;
     }
+    if (this.focus === "editor") {
+      if (this.helix.handle(key)) {
+        key.preventDefault();
+        this.renderStatus();
+      }
+      return;
+    }
     if (this.focus === "tables") this.tablesKey(key);
     else if (this.focus === "results") this.resultsKey(key);
   };
 
   private completionKey(key: KeyEvent): boolean {
     if (key.ctrl && key.name === "space") {
-      this.openCompletion(true);
+      if (this.helix.mode === "insert") this.openCompletion(true);
       return true;
     }
     if (!this.popup) return false;
@@ -278,7 +323,7 @@ export class App {
         return true;
       case "escape":
         this.closeCompletion();
-        return true;
+        return false;
       case "left":
       case "right":
       case "home":
@@ -292,7 +337,7 @@ export class App {
   }
 
   private completeAfterEdit(): void {
-    if (this.focus !== "editor" || !this.connected) return;
+    if (this.focus !== "editor" || !this.connected || this.helix.mode !== "insert") return;
     const text = this.editor.plainText;
     if (text === this.acceptedText) return;
     this.acceptedText = null;
@@ -348,6 +393,7 @@ export class App {
   }
 
   private cursorMoved(): void {
+    if (this.helix.mode === "normal") this.helix.follow(this.cursorIndex(this.editor.plainText));
     if (!this.popup) return;
     const text = this.editor.plainText;
     const result = complete(text, this.cursorIndex(text), this.catalog);
@@ -356,15 +402,30 @@ export class App {
 
   private replaceWord(result: CompletionResult, insert: string, accept: boolean): void {
     if (accept) this.closeCompletion();
-    const text = this.editor.plainText;
-    const from = this.position(text, result.from);
-    const to = this.position(text, result.to);
-    this.editor.editBuffer.deleteRange(from.row, from.col, to.row, to.col);
-    this.editor.editBuffer.setCursor(from.row, from.col);
-    this.editor.editBuffer.insertText(insert);
+    this.replaceRange(result.from, result.to, insert);
     this.acceptedText = accept ? this.editor.plainText : null;
     this.highlight();
     if (accept && insert.endsWith(".")) this.openCompletion(true);
+  }
+
+  private replaceRange(start: number, end: number, insert: string): void {
+    const text = this.editor.plainText;
+    const from = this.position(text, start);
+    const to = this.position(text, end);
+    if (end > start) this.editor.editBuffer.deleteRange(from.row, from.col, to.row, to.col);
+    this.editor.editBuffer.setCursor(from.row, from.col);
+    if (insert !== "") this.editor.editBuffer.insertText(insert);
+  }
+
+  private offsetOf(text: string, index: number): number {
+    const at = this.position(text, index);
+    return this.editor.editBuffer.positionToOffset(at.row, at.col);
+  }
+
+  private modeChanged(mode: Mode): void {
+    this.editor.cursorStyle = mode === "insert" ? { style: "line", blinking: true } : { style: "block", blinking: false };
+    if (mode === "normal") this.closeCompletion();
+    this.renderStatus();
   }
 
   private closeCompletion(): void {
@@ -445,10 +506,12 @@ export class App {
       }
       const select = `select * from ${quoteIdent(String(row[0]))}.${quoteIdent(String(row[1]))} limit 100;`;
       const existing = this.editor.plainText.trimEnd();
+      this.helix.beforeExternalChange();
       this.editor.editBuffer.setCursor(0, 0);
       this.moveCursorToEnd();
       this.editor.editBuffer.insertText(`${existing === "" ? "" : "\n\n"}${select}`);
       this.highlight();
+      this.helix.reset();
       void this.runStatementUnderCursor();
     }
   }
@@ -793,8 +856,16 @@ export class App {
     this.resultsText.content = styled(joinLines(laid.lines));
   }
 
+  private modeBadge(): TextChunk {
+    const label = this.helix.mode === "insert" ? " INS " : this.helix.extending ? " EXT " : " NOR ";
+    const pending = this.helix.pendingKey ? ` ${this.helix.pendingKey}…` : "";
+    const color = this.helix.mode === "insert" ? theme.good : this.helix.extending ? theme.warning : theme.accent;
+    return bold(bg(color)(fg(theme.background)(`${label}${pending}`)));
+  }
+
   private renderStatus(): void {
     const message = this.message ? [fg(this.message.kind === "error" ? theme.error : theme.muted)(` ${this.message.text}`)] : [];
+    if (this.screen === "workspace" && this.focus === "editor") message.unshift(this.modeBadge());
     const hints =
       this.screen === "connections"
         ? " ↑↓ choose · Enter connect · r reload · Ctrl-Q quit"
