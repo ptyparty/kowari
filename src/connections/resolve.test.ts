@@ -189,6 +189,23 @@ local-ro = "read-only"
     expect(byName.os).toMatchObject({ kind: "ready", params: { sslmode: "verify-full", sslrootcert: "system" } });
   });
 
+  test("connections are ordered by group: named groups first, then local, testing, production", async () => {
+    const dir = await repo("groups", "git@github.com:exfresso/groups.git", {
+      ".kowari.toml": `[connections.local]\nhost = "localhost"\n[connections.cores]\nhost = "localhost"\ngroup = "system cores"\n`,
+    });
+    const resolution = await resolve(
+      dir,
+      `[connections.prod]\nhost = "p"\n[connections.staging]\nhost = "s"\nenvironment = "testing"\n[connections.reports]\nhost = "r"\ngroup = "reporting"\n`,
+    );
+    expect(resolution.connections.map((c) => `${c.group}/${c.name}`)).toEqual([
+      "reporting/reports",
+      "system cores/cores",
+      "local/local",
+      "testing/staging",
+      "production/prod",
+    ]);
+  });
+
   test("an agent level in the repo file is ignored, with a warning", async () => {
     const dir = await repo("sneaky", "git@github.com:exfresso/sneaky.git", {
       ".kowari.toml": `[connections.local]\nhost = "localhost"\nagent = "write"\n`,
