@@ -35,13 +35,12 @@ afterEach(async () => {
   setup = undefined;
 });
 
-function connection(name: string, environment: ResolvedConnection["environment"], ready = true, group: string = environment): ResolvedConnection {
+function connection(name: string, environment: ResolvedConnection["environment"], ready = true): ResolvedConnection {
   const u = new URL(adminUrl);
   return {
     name,
     source: environment === "local" ? "repo" : "user",
     environment,
-    group,
     agent: "read-only",
     agentNote: null,
     target: ready
@@ -88,24 +87,6 @@ describe("kowari TUI", () => {
     s.mockInput.pressArrow("down");
     frame = await until(s, (f) => f.includes("APP_DB_PORT not set"));
     expect(frame).toContain("testing");
-  });
-
-  test("groups connections under headings, and arrows skip the headings", async () => {
-    const s = await open([connection("local", "local"), connection("cores", "local", true, "system cores"), connection("prod", "production")]);
-    let frame = await until(s, (f) => f.includes("Details"));
-    expect(frame).toMatch(/│\s{3}local\s+│/);
-    expect(frame).toContain("  system cores");
-    expect(frame).toContain("  production");
-    s.mockInput.pressArrow("down");
-    frame = await until(s, (f) => f.includes("group        system cores"));
-    s.mockInput.pressArrow("down");
-    await until(s, (f) => /▸\s+prod/.test(f));
-  });
-
-  test("shows no headings when every connection is in one group", async () => {
-    const s = await open([connection("local", "local"), connection("local-ro", "local")]);
-    const frame = await until(s, (f) => f.includes("Details"));
-    expect(frame).not.toMatch(/^\s*│\s+local\s*│/m);
   });
 
   test("connects, runs the statement under the cursor with Ctrl-Enter, and shows the grid", async () => {

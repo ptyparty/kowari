@@ -14,7 +14,6 @@ export type Definition = {
   password?: string;
   sslmode?: string;
   sslrootcert?: string;
-  group?: string;
 };
 
 export type Grant = { agent: AgentLevel; hosts: string[] };
@@ -29,7 +28,7 @@ export type RepoConfig = { connections: Map<string, Definition> };
 
 export type Parsed<T> = { value: T; problems: string[] };
 
-const definitionFields = ["host", "port", "database", "user", "password", "sslmode", "sslrootcert", "group"] as const;
+const definitionFields = ["host", "port", "database", "user", "password", "sslmode", "sslrootcert"] as const;
 
 export function parseUserConfig(text: string, source: string): Parsed<UserConfig> {
   const problems: string[] = [];

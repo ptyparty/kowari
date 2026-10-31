@@ -28,7 +28,6 @@ export type ResolvedConnection = {
   name: string;
   source: "user" | "repo";
   environment: Environment;
-  group: string;
   agent: AgentLevel;
   agentNote: string | null;
   target: { kind: "ready"; params: ConnectionParams } | { kind: "unavailable"; reason: string };
@@ -76,7 +75,6 @@ export async function resolveConnections(options: ResolveOptions): Promise<Resol
       name,
       source: "user",
       environment: entry.environment,
-      group: entry.definition.group?.trim() || entry.environment,
       agent: entry.agent,
       agentNote: null,
       target: resolveTarget(entry.definition, lookup, path.dirname(userPath)),
@@ -92,7 +90,7 @@ export async function resolveConnections(options: ResolveOptions): Promise<Resol
     const { agent, agentNote } = applyGrant(grants.get(name), target, localHosts);
     const host = target.kind === "ready" ? target.params.host : resolvedHost(definition, lookup);
     const environment = host !== null && isLocal(localHosts, host) ? "local" : "production";
-    connections.push({ name, source: "repo", environment, group: definition.group?.trim() || environment, agent, agentNote, target });
+    connections.push({ name, source: "repo", environment, agent, agentNote, target });
   }
 
   for (const name of exact ? grants.keys() : []) {
@@ -101,7 +99,7 @@ export async function resolveConnections(options: ResolveOptions): Promise<Resol
     }
   }
 
-  return { worktree, connections: inGroupOrder(connections), problems };
+  return { worktree, connections, problems };
 }
 
 export function describeTarget(connection: ResolvedConnection): string {
@@ -109,17 +107,6 @@ export function describeTarget(connection: ResolvedConnection): string {
   const p = connection.target.params;
   const ssl = p.sslmode === "prefer" ? "" : `, sslmode ${p.sslmode}`;
   return `${p.user}@${p.host}:${p.port}/${p.database} (password ${p.password === null ? "missing" : "set"}${ssl})`;
-}
-
-const environmentOrder = ["local", "testing", "production"];
-
-function inGroupOrder(connections: ResolvedConnection[]): ResolvedConnection[] {
-  const named = [...new Set(connections.map((c) => c.group).filter((g) => !environmentOrder.includes(g)))];
-  const order = [...named, ...environmentOrder];
-  return connections
-    .map((c, i) => ({ c, i }))
-    .sort((a, b) => order.indexOf(a.c.group) - order.indexOf(b.c.group) || a.i - b.i)
-    .map(({ c }) => c);
 }
 
 function grantsFor(repos: UserConfig["repos"], worktree: Worktree): { grants: Map<string, Grant>; exact: boolean } {

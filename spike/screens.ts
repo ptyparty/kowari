@@ -38,7 +38,6 @@ const params = { host: u.hostname, port: Number(u.port), database: db.name, user
 const connection = (name: string, environment: ResolvedConnection["environment"], agent: ResolvedConnection["agent"], source: ResolvedConnection["source"]): ResolvedConnection => ({
   name,
   source,
-  group: environment,
   environment,
   agent,
   agentNote: null,

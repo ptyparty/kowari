@@ -756,20 +756,14 @@ export class App {
     }
     const nameWidth = Math.max("Name".length, ...connections.map((c) => c.name.length));
     const header: Line = [bold(fg(theme.muted)(`    ${"Name".padEnd(nameWidth + 2)}${"Environment".padEnd(14)}Claude`))];
-    const grouped = new Set(connections.map((c) => c.group)).size > 1;
-    const lines: Line[] = [header];
-    connections.forEach((c, i) => {
-      if (grouped && c.group !== connections[i - 1]?.group) {
-        if (i > 0) lines.push([]);
-        lines.push([bold(fg(groupColor(c.group))(`  ${c.group}`))]);
-      }
+    const rows = connections.map((c, i) => {
       const selected = i === this.connectionIndex;
       const marker = selected ? fg(theme.accent)("▸ ") : "  ";
       const active = this.connected?.connection.name === c.name ? fg(theme.good)("● ") : "  ";
       const name = fg(c.target.kind === "unavailable" ? theme.muted : theme.text)(c.name.padEnd(nameWidth + 2));
-      lines.push([marker, active, name, fg(environmentColor[c.environment])(c.environment.padEnd(14)), fg(levelColor[c.agent])(c.agent)]);
+      return [marker, active, name, fg(environmentColor[c.environment])(c.environment.padEnd(14)), fg(levelColor[c.agent])(c.agent)];
     });
-    this.listText.content = styled(joinLines(lines));
+    this.listText.content = styled(joinLines([header, ...rows]));
     this.inspectText.content = this.inspection(connections[this.connectionIndex]!);
   }
 
@@ -777,7 +771,6 @@ export class App {
     const field = (label: string, value: string, color: string = theme.text): Line => [fg(theme.muted)(label.padEnd(13)), fg(color)(value)];
     const lines: Line[] = [[bold(fg(theme.text)(c.name))], []];
     lines.push(field("environment", c.environment, environmentColor[c.environment]));
-    if (c.group !== c.environment) lines.push(field("group", c.group));
     lines.push(field("defined in", c.source === "user" ? "your config" : `.kowari.toml in ${this.resolution?.worktree.root ?? ""}`));
     if (c.target.kind === "ready") {
       const p = c.target.params;
@@ -894,10 +887,6 @@ function pane(renderer: CliRenderer, title: string, size: Record<string, unknown
     paddingLeft: 1,
     paddingRight: 1,
   });
-}
-
-function groupColor(group: string): string {
-  return group in environmentColor ? environmentColor[group as keyof typeof environmentColor] : theme.text;
 }
 
 function setBorder(box: BoxRenderable, color: string): void {
