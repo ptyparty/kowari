@@ -108,17 +108,34 @@ async function runQuery(sql: Sql, text: string, limits: AgentLimits, layers: Lay
   }
 }
 
-async function collectRows(sql: Sql, conn: ReservedSql, text: string, limits: AgentLimits): Promise<AgentResult> {
+export type Cancellable = { cancel: () => unknown };
+
+function asText(value: unknown): unknown {
+  return value instanceof Uint8Array ? Buffer.from(value).toString("utf8") : value;
+}
+
+export async function collectRows(
+  sql: Sql,
+  conn: ReservedSql,
+  text: string,
+  limits: Pick<AgentLimits, "maxRows" | "maxBytes">,
+  onStart: (query: Cancellable) => void = () => {},
+  values: "typed" | "text" = "typed",
+): Promise<AgentResult> {
   const rows: unknown[][] = [];
   let columns: AgentColumn[] = [];
   let bytes = 0;
   let truncated = false;
 
-  const result = await conn.unsafe(text, [], { simple: false }).values().cursor(100, (page) => {
+  const pending = conn.unsafe(text, [], { simple: false });
+  const query = values === "text" ? pending.raw() : pending.values();
+  onStart(query);
+  const result = await query.cursor(100, (page) => {
     const pageColumns = (page as unknown as { columns?: AgentColumn[] }).columns;
     if (pageColumns) columns = pageColumns.map((c) => ({ name: c.name, type: c.type }));
-    for (const row of page as unknown as unknown[][]) {
-      bytes += JSON.stringify(row).length;
+    for (const raw of page as unknown as unknown[][]) {
+      const row = values === "text" ? raw.map(asText) : raw;
+      if (Number.isFinite(limits.maxBytes)) bytes += JSON.stringify(row).length;
       if (rows.length >= limits.maxRows || bytes > limits.maxBytes) {
         truncated = true;
         return sql.CLOSE;

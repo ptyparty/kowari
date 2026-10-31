@@ -6,6 +6,7 @@ import { describeTarget, resolveConnections, type Resolution } from "./connectio
 import { formatRows, rowsAsJson } from "./format.ts";
 
 const usage = `Usage:
+  kowari                              Open the kowari TUI for this worktree (in a terminal; otherwise prints this)
   kowari connections                  List the connections for this worktree, and what Claude may do with each
   kowari query <connection> [sql|-]   Run one statement (from stdin when sql is - or missing)
   kowari tables <connection>          List tables and views
@@ -17,7 +18,7 @@ Options:
   --json            Print JSON instead of text
   --max-rows <n>    Stop after n rows (default ${defaultAgentLimits.maxRows})
 
-Every command here is for Claude: it obeys each connection's agent level.
+Every command below the first is for Claude: it obeys each connection's agent level.
 A connection Claude has no access to is refused, read-only connections
 run through every read-only layer, and writes on approve-writes
 connections are refused until the kowari TUI can approve them.
@@ -59,6 +60,11 @@ async function main(argv: string[]): Promise<number> {
       if (!rest[1]) throw new UsageError("describe needs a table name");
       return withSession(options, rest[0], (session) => printDescription(session, rest[1]!, options));
     case undefined:
+      if (!process.stdin.isTTY || !process.stdout.isTTY) {
+        console.log(usage);
+        return 0;
+      }
+      return (await import("./tui/main.ts")).runTui(options.cwd);
     case "help":
     case "--help":
     case "-h":

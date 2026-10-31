@@ -1,6 +1,14 @@
 import os from "node:os";
 import path from "node:path";
-import { parseRepoConfig, parseUserConfig, type AgentLevel, type Definition, type Grant, type UserConfig } from "./config.ts";
+import {
+  parseRepoConfig,
+  parseUserConfig,
+  type AgentLevel,
+  type Definition,
+  type Environment,
+  type Grant,
+  type UserConfig,
+} from "./config.ts";
 import { parseDotenv } from "./dotenv.ts";
 import { interpolate } from "./interpolate.ts";
 import { findWorktree, type Worktree } from "./worktree.ts";
@@ -16,6 +24,7 @@ export type ConnectionParams = {
 export type ResolvedConnection = {
   name: string;
   source: "user" | "repo";
+  environment: Environment;
   agent: AgentLevel;
   agentNote: string | null;
   target: { kind: "ready"; params: ConnectionParams } | { kind: "unavailable"; reason: string };
@@ -62,6 +71,7 @@ export async function resolveConnections(options: ResolveOptions): Promise<Resol
     connections.push({
       name,
       source: "user",
+      environment: entry.environment,
       agent: entry.agent,
       agentNote: null,
       target: resolveTarget(entry.definition, lookup),
@@ -75,7 +85,9 @@ export async function resolveConnections(options: ResolveOptions): Promise<Resol
     }
     const target = resolveTarget(definition, lookup);
     const { agent, agentNote } = applyGrant(grants.get(name), target, localHosts);
-    connections.push({ name, source: "repo", agent, agentNote, target });
+    const host = target.kind === "ready" ? target.params.host : resolvedHost(definition, lookup);
+    const environment = host !== null && isLocal(localHosts, host) ? "local" : "production";
+    connections.push({ name, source: "repo", environment, agent, agentNote, target });
   }
 
   for (const name of exact ? grants.keys() : []) {
@@ -112,13 +124,22 @@ function applyGrant(
   if (target.kind !== "ready") return { agent: grant.agent, agentNote: null };
 
   const host = target.params.host.toLowerCase();
-  if (localHosts.has(host) || grant.hosts.includes(host)) {
+  if (isLocal(localHosts, host) || grant.hosts.includes(host)) {
     return { agent: grant.agent, agentNote: null };
   }
   return {
     agent: "none",
     agentNote: `granted ${grant.agent}, but it points at ${host}, which is not local; list it under the grant's hosts, or [local] hosts in your config, to allow it`,
   };
+}
+
+function isLocal(localHosts: Set<string>, host: string): boolean {
+  return localHosts.has(host.toLowerCase());
+}
+
+function resolvedHost(definition: Definition, lookup: (name: string) => string | undefined): string | null {
+  const host = interpolate(definition.host, lookup);
+  return host.ok ? host.value : null;
 }
 
 function resolveTarget(definition: Definition, lookup: (name: string) => string | undefined): ResolvedConnection["target"] {

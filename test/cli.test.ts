@@ -161,6 +161,12 @@ describe("kowari CLI", () => {
     expect(r).toEqual({ code: 1, out: "", err: "kowari: no table or view named nope'; drop table victim; --" });
   });
 
+  test("bare kowari without a terminal prints usage instead of opening the TUI", async () => {
+    const r = await kowari([]);
+    expect(r.code).toBe(0);
+    expect(r.out).toStartWith("Usage:");
+  });
+
   test("explains usage mistakes", async () => {
     const r = await kowari(["query"]);
     expect(r.code).toBe(2);

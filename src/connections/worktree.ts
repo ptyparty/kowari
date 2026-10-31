@@ -23,10 +23,10 @@ function checkoutPath(commonDir: string): string {
 export function normalizeRemote(remote: string): string {
   const trimmed = remote.trim().replace(/\/+$/, "").replace(/\.git$/, "");
   const scp = /^(?:[^@/]+@)?([^:/]+):(?!\/\/)(.+)$/.exec(trimmed);
-  if (scp && !trimmed.includes("://")) return `${scp[1]!.toLowerCase()}/${scp[2]}`;
+  if (scp && !trimmed.includes("://")) return `${scp[1]!.toLowerCase()}/${scp[2]!.replace(/^\/+/, "")}`;
   try {
     const url = new URL(trimmed);
-    return `${url.hostname.toLowerCase()}${url.pathname}`;
+    return `${url.hostname.toLowerCase()}/${url.pathname.replace(/^\/+/, "")}`;
   } catch {
     return trimmed;
   }

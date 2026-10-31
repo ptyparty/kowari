@@ -11,6 +11,7 @@ describe("normalizeRemote", () => {
     ["https://github.com/exfresso/argus", "github.com/exfresso/argus"],
     ["https://GitHub.com/exfresso/argus.git/", "github.com/exfresso/argus"],
     ["ssh://git@github.com/exfresso/argus.git", "github.com/exfresso/argus"],
+    ["git@github.com:/exfresso/merlin", "github.com/exfresso/merlin"],
   ])("%s", (remote, expected) => {
     expect(normalizeRemote(remote)).toBe(expected);
   });
@@ -138,6 +139,39 @@ local-ro = "read-only"
     });
     const resolution = await resolve(dir, `[repos."github.com/exfresso/other"]\nlocal = "write"\n`);
     expect(resolution.connections.map((c) => c.agent)).toEqual(["none", "none"]);
+  });
+
+  test("environments: yours as declared (production when unsaid), the repo's local only on local hosts", async () => {
+    const dir = await repo("envs", "git@github.com:exfresso/envs.git", {
+      ".kowari.toml": `[connections.here]\nhost = "localhost"\n[connections.away]\nhost = "db.example.com"\n[connections.claims]\nhost = "db.example.com"\nenvironment = "local"\n`,
+    });
+    const resolution = await resolve(
+      dir,
+      `[connections.staging]\nhost = "s"\nenvironment = "testing"\n[connections.unsaid]\nhost = "u"\n[connections.typo]\nhost = "t"\nenvironment = "prod"\n`,
+    );
+    expect(Object.fromEntries(resolution.connections.map((c) => [c.name, c.environment]))).toEqual({
+      staging: "testing",
+      unsaid: "production",
+      typo: "production",
+      here: "local",
+      away: "production",
+      claims: "production",
+    });
+    expect(resolution.problems).toEqual([
+      expect.stringContaining("connections.typo.environment should be one of local, testing, production"),
+      ".kowari.toml: connections.claims.environment is ignored: a repo connection is local when its host is local, and production otherwise",
+    ]);
+  });
+
+  test("an unavailable repo connection is local only when its host is", async () => {
+    const dir = await repo("unavailable-envs", "git@github.com:exfresso/unavailable-envs.git", {
+      ".kowari.toml": `[connections.here]\nhost = "localhost"\nport = "\${MISSING}"\n[connections.away]\nhost = "prod-db.example.com"\nport = "\${MISSING}"\n`,
+    });
+    const resolution = await resolve(dir, "");
+    expect(resolution.connections.map((c) => `${c.name}=${c.environment}:${c.target.kind}`)).toEqual([
+      "here=local:unavailable",
+      "away=production:unavailable",
+    ]);
   });
 
   test("an agent level in the repo file is ignored, with a warning", async () => {

@@ -2,6 +2,10 @@ export const agentLevels = ["none", "read-only", "approve-writes", "write"] as c
 
 export type AgentLevel = (typeof agentLevels)[number];
 
+export const environments = ["local", "testing", "production"] as const;
+
+export type Environment = (typeof environments)[number];
+
 export type Definition = {
   host: string;
   port?: string;
@@ -13,7 +17,7 @@ export type Definition = {
 export type Grant = { agent: AgentLevel; hosts: string[] };
 
 export type UserConfig = {
-  connections: Map<string, { definition: Definition; agent: AgentLevel }>;
+  connections: Map<string, { definition: Definition; agent: AgentLevel; environment: Environment }>;
   repos: Map<string, Map<string, Grant>>;
   localHosts: string[];
 };
@@ -27,14 +31,15 @@ const definitionFields = ["host", "port", "database", "user", "password"] as con
 export function parseUserConfig(text: string, source: string): Parsed<UserConfig> {
   const problems: string[] = [];
   const doc = parseToml(text, source, problems);
-  const connections = new Map<string, { definition: Definition; agent: AgentLevel }>();
+  const connections = new Map<string, { definition: Definition; agent: AgentLevel; environment: Environment }>();
   const repos = new Map<string, Map<string, Grant>>();
 
   for (const [name, raw] of tableEntries(doc.connections, `${source}: connections`, problems)) {
     const where = `${source}: connections.${name}`;
-    const definition = parseDefinition(raw, where, problems, ["agent"]);
+    const definition = parseDefinition(raw, where, problems, ["agent", "environment"]);
     const agent = raw.agent === undefined ? "none" : parseLevel(raw.agent, `${where}.agent`, problems);
-    if (definition) connections.set(name, { definition, agent });
+    const environment = raw.environment === undefined ? "production" : parseEnvironment(raw.environment, `${where}.environment`, problems);
+    if (definition) connections.set(name, { definition, agent, environment });
   }
 
   for (const [identity, raw] of tableEntries(doc.repos, `${source}: repos`, problems)) {
@@ -62,7 +67,10 @@ export function parseRepoConfig(text: string, source: string): Parsed<RepoConfig
     if (raw.agent !== undefined) {
       problems.push(`${where}.agent is ignored: what Claude may do is set in your own config, under [repos]`);
     }
-    const definition = parseDefinition(raw, where, problems, ["agent"]);
+    if (raw.environment !== undefined) {
+      problems.push(`${where}.environment is ignored: a repo connection is local when its host is local, and production otherwise`);
+    }
+    const definition = parseDefinition(raw, where, problems, ["agent", "environment"]);
     if (definition) connections.set(name, definition);
   }
 
@@ -151,6 +159,12 @@ function parseGrant(value: unknown, where: string, problems: string[]): Grant | 
   }
   problems.push(`${where} should be an agent level or { agent = ..., hosts = [...] }`);
   return null;
+}
+
+function parseEnvironment(value: unknown, where: string, problems: string[]): Environment {
+  if (typeof value === "string" && (environments as readonly string[]).includes(value)) return value as Environment;
+  problems.push(`${where} should be one of ${environments.join(", ")}; treating it as production`);
+  return "production";
 }
 
 function parseLevel(value: unknown, where: string, problems: string[]): AgentLevel {
