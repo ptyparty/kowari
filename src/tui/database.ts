@@ -1,6 +1,7 @@
 import postgres, { type ReservedSql, type Sql } from "postgres";
 import { collectRows, type AgentResult, type Cancellable } from "../agent/read-only.ts";
 import type { ConnectionParams } from "../connections/resolve.ts";
+import { driverOptions } from "../connections/ssl.ts";
 
 export type Run = { result: AgentResult; ms: number };
 
@@ -17,8 +18,7 @@ export class Database {
 
   static async open(params: ConnectionParams): Promise<Database> {
     const sql = postgres({
-      ...params,
-      password: params.password ?? undefined,
+      ...driverOptions(params),
       max: 1,
       onnotice: () => {},
       connect_timeout: 5,

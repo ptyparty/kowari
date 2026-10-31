@@ -1,5 +1,6 @@
 import postgres, { type ReservedSql, type Sql } from "postgres";
 import type { ConnectionParams } from "../connections/resolve.ts";
+import { driverOptions } from "../connections/ssl.ts";
 import { gateStatement } from "./gate.ts";
 import { checkAgentRole, type RoleProblem } from "./role-check.ts";
 
@@ -62,10 +63,7 @@ export async function openReadOnly(
       idle_in_transaction_session_timeout: limits.statementTimeoutMs * 2,
     },
   };
-  const sql =
-    typeof target === "string"
-      ? postgres(target, options)
-      : postgres({ ...options, ...target, password: target.password ?? undefined });
+  const sql = typeof target === "string" ? postgres(target, options) : postgres({ ...options, ...driverOptions(target) });
 
   if (layers.roleCheck) {
     const problems = await checkAgentRole(sql).catch(async (e: unknown) => {
@@ -110,6 +108,8 @@ async function runQuery(sql: Sql, text: string, limits: AgentLimits, layers: Lay
 
 export type Cancellable = { cancel: () => unknown };
 
+const utilityWithRows = /^\s*(?:(?:--[^\n]*(?:\n|$)|\/\*[\s\S]*?\*\/)\s*)*(?:show|explain)\b/i;
+
 function asText(value: unknown): unknown {
   return value instanceof Uint8Array ? Buffer.from(value).toString("utf8") : value;
 }
@@ -130,19 +130,28 @@ export async function collectRows(
   const pending = conn.unsafe(text, [], { simple: false });
   const query = values === "text" ? pending.raw() : pending.values();
   onStart(query);
-  const result = await query.cursor(100, (page) => {
+
+  const take = (page: unknown[][]): boolean => {
     const pageColumns = (page as unknown as { columns?: AgentColumn[] }).columns;
     if (pageColumns) columns = pageColumns.map((c) => ({ name: c.name, type: c.type }));
-    for (const raw of page as unknown as unknown[][]) {
+    for (const raw of page) {
       const row = values === "text" ? raw.map(asText) : raw;
       if (Number.isFinite(limits.maxBytes)) bytes += JSON.stringify(row).length;
       if (rows.length >= limits.maxRows || bytes > limits.maxBytes) {
         truncated = true;
-        return sql.CLOSE;
+        return false;
       }
       rows.push(row);
     }
-  });
+    return true;
+  };
+
+  const result = utilityWithRows.test(text)
+    ? await query.then((all) => {
+        take(all as unknown as unknown[][]);
+        return all;
+      })
+    : await query.cursor(100, (page) => (take(page as unknown as unknown[][]) ? undefined : sql.CLOSE));
 
   if (columns.length === 0 && !truncated) {
     const described = await conn.unsafe(text, [], { simple: false }).describe();

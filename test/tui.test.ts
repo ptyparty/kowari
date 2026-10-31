@@ -44,7 +44,7 @@ function connection(name: string, environment: ResolvedConnection["environment"]
     agent: "read-only",
     agentNote: null,
     target: ready
-      ? { kind: "ready", params: { host: u.hostname, port: Number(u.port), database: db.name, user: u.username, password: u.password } }
+      ? { kind: "ready", params: { host: u.hostname, port: Number(u.port), database: db.name, user: u.username, password: u.password, sslmode: "prefer", sslrootcert: null } }
       : { kind: "unavailable", reason: "APP_DB_PORT not set" },
   };
 }
@@ -80,6 +80,7 @@ describe("kowari TUI", () => {
     const s = await open([connection("local", "local"), connection("staging", "testing", false)]);
     let frame = await until(s, (f) => f.includes("Details"));
     expect(frame).toMatch(/Name\s+Environment\s+Claude/);
+    expect(frame).toContain("sslmode      prefer");
     expect(frame).toMatch(/▸\s+local\s+local\s+read-only/);
     expect(frame).toContain("password     set");
 

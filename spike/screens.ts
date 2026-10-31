@@ -34,7 +34,7 @@ await db.admin.unsafe(`
 `).simple();
 
 const u = new URL(adminUrl);
-const params = { host: u.hostname, port: Number(u.port), database: db.name, user: u.username, password: u.password };
+const params = { host: u.hostname, port: Number(u.port), database: db.name, user: u.username, password: u.password, sslmode: "prefer" as const, sslrootcert: null };
 const connection = (name: string, environment: ResolvedConnection["environment"], agent: ResolvedConnection["agent"], source: ResolvedConnection["source"]): ResolvedConnection => ({
   name,
   source,

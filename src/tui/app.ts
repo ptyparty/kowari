@@ -778,6 +778,8 @@ export class App {
       lines.push(field("database", p.database));
       lines.push(field("user", p.user));
       lines.push(field("password", p.password === null ? "missing" : "set"));
+      lines.push(field("sslmode", p.sslmode));
+      if (p.sslrootcert) lines.push(field("sslrootcert", p.sslrootcert));
     } else {
       lines.push(field("unavailable", c.target.reason, theme.error));
     }

@@ -11,6 +11,7 @@ import {
 } from "./config.ts";
 import { parseDotenv } from "./dotenv.ts";
 import { interpolate } from "./interpolate.ts";
+import { sslProblem, type SslMode } from "./ssl.ts";
 import { findWorktree, type Worktree } from "./worktree.ts";
 
 export type ConnectionParams = {
@@ -19,6 +20,8 @@ export type ConnectionParams = {
   database: string;
   user: string;
   password: string | null;
+  sslmode: SslMode;
+  sslrootcert: string | null;
 };
 
 export type ResolvedConnection = {
@@ -74,7 +77,7 @@ export async function resolveConnections(options: ResolveOptions): Promise<Resol
       environment: entry.environment,
       agent: entry.agent,
       agentNote: null,
-      target: resolveTarget(entry.definition, lookup),
+      target: resolveTarget(entry.definition, lookup, path.dirname(userPath)),
     });
   }
 
@@ -83,7 +86,7 @@ export async function resolveConnections(options: ResolveOptions): Promise<Resol
       problems.push(`${repoConfigFile}: connection ${name} is hidden by the one with the same name in your config`);
       continue;
     }
-    const target = resolveTarget(definition, lookup);
+    const target = resolveTarget(definition, lookup, worktree.root);
     const { agent, agentNote } = applyGrant(grants.get(name), target, localHosts);
     const host = target.kind === "ready" ? target.params.host : resolvedHost(definition, lookup);
     const environment = host !== null && isLocal(localHosts, host) ? "local" : "production";
@@ -102,7 +105,8 @@ export async function resolveConnections(options: ResolveOptions): Promise<Resol
 export function describeTarget(connection: ResolvedConnection): string {
   if (connection.target.kind === "unavailable") return `unavailable: ${connection.target.reason}`;
   const p = connection.target.params;
-  return `${p.user}@${p.host}:${p.port}/${p.database} (password ${p.password === null ? "missing" : "set"})`;
+  const ssl = p.sslmode === "prefer" ? "" : `, sslmode ${p.sslmode}`;
+  return `${p.user}@${p.host}:${p.port}/${p.database} (password ${p.password === null ? "missing" : "set"}${ssl})`;
 }
 
 function grantsFor(repos: UserConfig["repos"], worktree: Worktree): { grants: Map<string, Grant>; exact: boolean } {
@@ -142,7 +146,11 @@ function resolvedHost(definition: Definition, lookup: (name: string) => string |
   return host.ok ? host.value : null;
 }
 
-function resolveTarget(definition: Definition, lookup: (name: string) => string | undefined): ResolvedConnection["target"] {
+function resolveTarget(
+  definition: Definition,
+  lookup: (name: string) => string | undefined,
+  baseDir: string,
+): ResolvedConnection["target"] {
   const missing = new Set<string>();
   const field = (template: string | undefined): string | undefined => {
     if (template === undefined) return undefined;
@@ -157,6 +165,8 @@ function resolveTarget(definition: Definition, lookup: (name: string) => string 
   const database = field(definition.database);
   const user = field(definition.user);
   const password = field(definition.password);
+  const sslmode = field(definition.sslmode);
+  const sslrootcert = field(definition.sslrootcert);
 
   if (missing.size > 0) {
     return { kind: "unavailable", reason: `${[...missing].sort().join(", ")} not set` };
@@ -167,6 +177,10 @@ function resolveTarget(definition: Definition, lookup: (name: string) => string 
     return { kind: "unavailable", reason: "port is not a port number" };
   }
 
+  const mode = sslmode ?? "prefer";
+  const problem = sslProblem(mode, sslrootcert ?? null);
+  if (problem) return { kind: "unavailable", reason: problem };
+
   const resolvedUser = user ?? "postgres";
   return {
     kind: "ready",
@@ -176,8 +190,15 @@ function resolveTarget(definition: Definition, lookup: (name: string) => string 
       database: database ?? resolvedUser,
       user: resolvedUser,
       password: password ?? null,
+      sslmode: mode as SslMode,
+      sslrootcert: !sslrootcert ? null : sslrootcert === "system" ? "system" : resolvePath(sslrootcert, baseDir),
     },
   };
+}
+
+function resolvePath(file: string, baseDir: string): string {
+  if (file === "~" || file.startsWith("~/")) return path.join(os.homedir(), file.slice(1));
+  return path.resolve(baseDir, file);
 }
 
 async function readOptional<T>(

@@ -94,6 +94,13 @@ describe("agent read-only connection", () => {
     });
   });
 
+  test("returns every row of show and explain", async () => {
+    const show = await conn.query("show statement_timeout");
+    expect(show.kind === "rows" && show.rows).toEqual([["2s"]]);
+    const explain = await conn.query("-- plan\nexplain select * from victim");
+    expect(explain.kind === "rows" && explain.rows.length).toBeGreaterThan(0);
+  });
+
   test("caps rows", async () => {
     const result = await conn.query("select g from generate_series(1, 10000) g");
     expect(result.kind).toBe("rows");

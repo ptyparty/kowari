@@ -174,6 +174,21 @@ local-ro = "read-only"
     ]);
   });
 
+  test("sslmode defaults to prefer, is checked, and sslrootcert resolves against the file that names it", async () => {
+    const dir = await repo("ssl", "git@github.com:exfresso/ssl.git", {
+      ".kowari.toml": `[connections.repo-ca]\nhost = "localhost"\nsslmode = "verify-ca"\nsslrootcert = "certs/ca.pem"\n[connections.typo]\nhost = "localhost"\nsslmode = "requires"\n[connections.plain]\nhost = "localhost"\n[connections.lonely]\nhost = "localhost"\nsslmode = "verify-ca"\n[connections.allowed]\nhost = "localhost"\nsslmode = "allow"\n[connections.os]\nhost = "localhost"\nsslmode = "verify-full"\nsslrootcert = "system"\n`,
+    });
+    const resolution = await resolve(dir, `[connections.mine]\nhost = "db.internal"\nsslmode = "verify-full"\nsslrootcert = "rds.pem"\n`);
+    const byName = Object.fromEntries(resolution.connections.map((c) => [c.name, c.target]));
+    expect(byName.plain).toMatchObject({ kind: "ready", params: { sslmode: "prefer", sslrootcert: null } });
+    expect(byName["repo-ca"]).toMatchObject({ kind: "ready", params: { sslmode: "verify-ca", sslrootcert: path.join(dir, "certs/ca.pem") } });
+    expect(byName.mine).toMatchObject({ kind: "ready", params: { sslmode: "verify-full", sslrootcert: path.join(path.dirname(userConfigPath), "rds.pem") } });
+    expect(byName.typo).toEqual({ kind: "unavailable", reason: "sslmode should be one of disable, prefer, require, verify-ca, verify-full" });
+    expect(byName.lonely).toEqual({ kind: "unavailable", reason: 'sslmode verify-ca needs an sslrootcert (a CA file, or "system")' });
+    expect(byName.allowed).toEqual({ kind: "unavailable", reason: "sslmode allow is not supported; use prefer or disable" });
+    expect(byName.os).toMatchObject({ kind: "ready", params: { sslmode: "verify-full", sslrootcert: "system" } });
+  });
+
   test("an agent level in the repo file is ignored, with a warning", async () => {
     const dir = await repo("sneaky", "git@github.com:exfresso/sneaky.git", {
       ".kowari.toml": `[connections.local]\nhost = "localhost"\nagent = "write"\n`,
