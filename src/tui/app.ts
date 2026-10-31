@@ -723,7 +723,7 @@ export class App {
       if (attempt !== this.connectAttempt) return;
       const message = e instanceof Error ? e.message : String(e);
       if ((typed !== null || fromKeyring) && /password authentication failed|28P01/.test(message)) {
-        this.askPassword(connection, fromKeyring ? "the stored password was rejected" : "that password was rejected");
+        this.askPassword(connection, `${fromKeyring ? "the stored password was rejected" : "that password was rejected"}: ${message}`);
         return;
       }
       this.say(`could not connect to ${connection.name}: ${message}`, "error");
