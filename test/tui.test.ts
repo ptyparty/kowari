@@ -351,6 +351,22 @@ describe("kowari TUI", () => {
     await until(s, () => app!.text === "");
   });
 
+  test("shows when there are more columns off either edge", async () => {
+    const s = await open([connection("local", "local")]);
+    await connectFirst(s);
+    const cols = Array.from({ length: 12 }, (_, i) => `'value ${i + 1} padded wide' as column_${i + 1}`).join(", ");
+    await s.mockInput.typeText(`select ${cols}`);
+    s.mockInput.pressEnter({ ctrl: true });
+    let frame = await until(s, (f) => /columns 1–\d+ of 12/.test(f));
+    expect(frame).toMatch(/\+\d+ ›/);
+    expect(frame).not.toContain("‹ +");
+    s.mockInput.pressTab();
+    for (let i = 0; i < 11; i++) s.mockInput.pressArrow("right");
+    frame = await until(s, (f) => /columns \d+–12 of 12/.test(f));
+    expect(frame).toMatch(/‹ \+\d+/);
+    expect(frame).not.toMatch(/\+\d+ ›/);
+  });
+
   test("opens a JSON cell pretty-printed", async () => {
     const s = await open([connection("local", "local")]);
     await connectFirst(s);

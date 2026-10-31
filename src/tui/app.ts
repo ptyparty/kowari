@@ -1073,6 +1073,9 @@ export class App {
     }
     const laid = layoutGrid(rows, this.grid, width, height);
     this.grid = laid.cursor;
+    if (laid.first > 0 || laid.last < laid.total - 1) {
+      this.resultsBox.title = `${resultSummary(rows)} · columns ${laid.first + 1}–${laid.last + 1} of ${laid.total} · ${formatMs(run.ms)}`;
+    }
     this.resultsText.content = styled(joinLines(laid.lines));
   }
 

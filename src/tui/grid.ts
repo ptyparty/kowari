@@ -43,15 +43,29 @@ export function moveCursor(cursor: GridCursor, result: Rows, dRow: number, dCol:
   return { row, col, top, left };
 }
 
-export function layoutGrid(result: Rows, cursor: GridCursor, width: number, height: number): { lines: Line[]; cursor: GridCursor } {
+export type GridLayout = { lines: Line[]; cursor: GridCursor; first: number; last: number; total: number };
+
+const edge = 7;
+
+export function layoutGrid(result: Rows, cursor: GridCursor, width: number, height: number): GridLayout {
   const widths = columnWidths(result);
+  const total = widths.length;
   let left = cursor.left;
-  while (left < cursor.col && !fits(widths, left, cursor.col, width)) left += 1;
-  const shown = visibleColumns(widths, left, width);
+  while (left < cursor.col && !fits(widths, left, cursor.col, width - 2 * edge)) left += 1;
+  const leftEdge = left > 0 ? edge : 0;
+  let shown = visibleColumns(widths, left, width - leftEdge);
+  const moreRight = shown[shown.length - 1]! < total - 1;
+  if (moreRight) shown = visibleColumns(widths, left, width - leftEdge - edge);
+  const lastShown = shown[shown.length - 1]!;
+  const hiddenLeft = left;
+  const hiddenRight = total - 1 - lastShown;
   const fixed = { ...cursor, left };
 
-  const header: Line = [];
-  const rule: Line = [];
+  const leftMark = (label: string): (string | TextChunk)[] => (hiddenLeft > 0 ? [fg(theme.warning)(label.padEnd(edge))] : []);
+  const rightMark = (label: string): (string | TextChunk)[] => (hiddenRight > 0 ? [fg(theme.warning)(label.padStart(edge))] : []);
+
+  const header: Line = [...leftMark(`‹ +${hiddenLeft}`)];
+  const rule: Line = [...leftMark("‹")];
   shown.forEach((col, i) => {
     if (i > 0) {
       header.push(fg(theme.border)(separator));
@@ -60,12 +74,14 @@ export function layoutGrid(result: Rows, cursor: GridCursor, width: number, heig
     header.push(bold(fg(theme.accent)(pad(result.columns[col]!.name, widths[col]!))));
     rule.push(fg(theme.border)("─".repeat(widths[col]!)));
   });
+  header.push(...rightMark(`+${hiddenRight} ›`));
+  rule.push(...rightMark("›"));
 
   const lines: Line[] = [header, rule];
   const bodyHeight = Math.max(0, height - 2);
   for (let r = fixed.top; r < Math.min(result.rows.length, fixed.top + bodyHeight); r++) {
     const row = result.rows[r]!;
-    const line: Line = [];
+    const line: Line = [...leftMark("‹")];
     shown.forEach((col, i) => {
       if (i > 0) line.push(fg(theme.border)(separator));
       const value = row[col];
@@ -73,9 +89,10 @@ export function layoutGrid(result: Rows, cursor: GridCursor, width: number, heig
       const chunk = value === null || value === undefined ? fg(theme.muted)(text) : fg(theme.text)(text);
       line.push(r === fixed.row && col === fixed.col ? bg(theme.selection)(chunk) : chunk);
     });
+    line.push(...rightMark("›"));
     lines.push(line);
   }
-  return { lines, cursor: fixed };
+  return { lines, cursor: fixed, first: left, last: lastShown, total };
 }
 
 function visibleColumns(widths: number[], left: number, width: number): number[] {
