@@ -1,9 +1,9 @@
-import { scan } from "./tokens.ts";
+import { scan, type Scan } from "./tokens.ts";
 
 export type Span = { start: number; end: number; stop: number };
 
-export function statementSpans(text: string): Span[] {
-  const { tokens, scannedTo } = scan(text);
+export function statementSpans(text: string, scanned: Scan = scan(text)): Span[] {
+  const { tokens, scannedTo } = scanned;
   const spans: Span[] = [];
   let start: number | null = null;
   let end = 0;
@@ -31,8 +31,8 @@ export function statementSpans(text: string): Span[] {
   return spans;
 }
 
-export function statementAt(text: string, offset: number): Span | null {
-  const spans = statementSpans(text);
+export function statementAt(text: string, offset: number, scanned: Scan = scan(text)): Span | null {
+  const spans = statementSpans(text, scanned);
   if (spans.length === 0) return null;
   const containing = spans.find((s) => offset >= s.start && offset <= s.stop);
   if (containing) return containing;

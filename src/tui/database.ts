@@ -8,6 +8,7 @@ export const humanMaxRows = 1000;
 
 export class Database {
   private running: Cancellable | null = null;
+  private queue: Promise<unknown> = Promise.resolve();
 
   private constructor(
     private readonly sql: Sql,
@@ -35,7 +36,13 @@ export class Database {
     return this.running !== null;
   }
 
-  async run(text: string, maxRows = humanMaxRows): Promise<Run> {
+  run(text: string, maxRows = humanMaxRows): Promise<Run> {
+    const next = this.queue.then(() => this.runNow(text, maxRows));
+    this.queue = next.catch(() => {});
+    return next;
+  }
+
+  private async runNow(text: string, maxRows: number): Promise<Run> {
     const started = performance.now();
     try {
       const result = await collectRows(

@@ -94,6 +94,23 @@ try {
     await shoot(s, "tui-json-detail");
   });
 
+  await session(0, async (s) => {
+    s.mockInput.pressEnter();
+    await until(s, (f) => f.includes("LOCAL"));
+    const tail = " from shipment s\njoin carrier c on c.code = s.carrier\nwhere s.";
+    await s.mockInput.typeText(`select${tail}`);
+    await until(s, (f) => /col\s+status/.test(f));
+    await shoot(s, "tui-complete-where");
+    s.mockInput.pressEscape();
+    for (let i = 0; i < tail.length; i++) s.mockInput.pressBackspace();
+    const rest = " from shipment s\njoin carrier c on c.code = s.carrier";
+    await s.mockInput.typeText(rest);
+    for (let i = 0; i < rest.length; i++) s.mockInput.pressArrow("left");
+    await s.mockInput.typeText(" c.");
+    await until(s, (f) => /col\s+name/.test(f));
+    await shoot(s, "tui-complete-alias");
+  });
+
   await session(2, async (s) => {
     s.mockInput.pressEnter();
     await until(s, (f) => f.includes("TESTING"));

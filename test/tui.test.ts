@@ -62,6 +62,17 @@ async function open(connections: ResolvedConnection[]): Promise<TestRendererSetu
   return setup;
 }
 
+async function settled(s: TestRendererSetup): Promise<string> {
+  await Bun.sleep(150);
+  await s.renderOnce();
+  return s.captureCharFrame();
+}
+
+async function connectFirst(s: TestRendererSetup): Promise<void> {
+  s.mockInput.pressEnter();
+  await until(s, (f) => f.includes("LOCAL · local") && !f.includes("reading the catalog"));
+}
+
 describe("kowari TUI", () => {
   test("starts on the connection screen and inspects the selected connection", async () => {
     const s = await open([connection("local", "local"), connection("staging", "testing", false)]);
@@ -112,6 +123,83 @@ describe("kowari TUI", () => {
     const frame = await until(s, (f) => f.includes("2 rows"));
     expect(frame).toContain("select 42 as kept;");
     expect(frame).toContain("select * from public.shipment limit 100;");
+  });
+
+  test("completes columns of an aliased table and accepts with Tab", async () => {
+    const s = await open([connection("local", "local")]);
+    await connectFirst(s);
+    await s.mockInput.typeText("select  from shipment s");
+    for (let i = 0; i < " from shipment s".length; i++) s.mockInput.pressArrow("left");
+    await s.mockInput.typeText("s.sta");
+    await until(s, (f) => /col\s+status/.test(f));
+    s.mockInput.pressTab();
+    const frame = await until(s, (f) => f.includes("select s.status from shipment s"));
+    expect(frame).not.toMatch(/col\s+status/);
+  });
+
+  test("Tab completes as far as the matches agree, then a unique match; Shift-Tab takes the highlighted one", async () => {
+    await db.admin.unsafe(`create table if not exists shipment_leg (id int)`);
+    try {
+      const s = await open([connection("local", "local")]);
+      await connectFirst(s);
+
+      await s.mockInput.typeText("select * from sh");
+      await until(s, (f) => /tbl\s+shipment_leg/.test(f));
+      s.mockInput.pressTab();
+      let frame = await until(s, (f) => /from shipment\s/.test(f));
+      expect(frame).toMatch(/tbl\s+shipment_leg/);
+
+      await s.mockInput.typeText("_");
+      s.mockInput.pressTab();
+      await until(s, (f) => f.includes("select * from shipment_leg"));
+      frame = await settled(s);
+      expect(frame).not.toMatch(/tbl\s+shipment_leg/);
+
+      for (let i = 0; i < "shipment_leg".length; i++) s.mockInput.pressBackspace();
+      await s.mockInput.typeText("sh");
+      await until(s, (f) => /tbl\s+shipment/.test(f));
+      s.mockInput.pressTab({ shift: true });
+      await until(s, (f) => !/tbl\s+shipment/.test(f));
+      frame = await settled(s);
+      expect(frame).not.toMatch(/tbl\s+shipment/);
+      expect(frame).toContain("select * from shipment ");
+    } finally {
+      await db.admin.unsafe(`drop table if exists shipment_leg`);
+    }
+  });
+
+  test("the popup closes when the connection screen opens", async () => {
+    const s = await open([connection("local", "local")]);
+    await connectFirst(s);
+    await s.mockInput.typeText("select * from sh");
+    await until(s, (f) => /tbl\s+shipment/.test(f));
+    s.mockInput.pressKey("o", { ctrl: true });
+    const frame = await until(s, (f) => f.includes("Details"));
+    expect(frame).not.toMatch(/tbl\s+shipment/);
+  });
+
+  test("tables created in the session are offered afterwards", async () => {
+    try {
+      const s = await open([connection("local", "local")]);
+      await connectFirst(s);
+      await s.mockInput.typeText("create table invoice_line (id int)");
+      s.mockInput.pressEnter({ ctrl: true });
+      await until(s, (f) => f.includes("CREATE TABLE") && f.includes("invoice_line "));
+      await Bun.sleep(100);
+      for (let i = 0; i < "create table invoice_line (id int)".length; i++) s.mockInput.pressBackspace();
+      await s.mockInput.typeText("select * from invoice_l");
+      await until(s, (f) => /tbl\s+invoice_line/.test(f));
+    } finally {
+      await db.admin.unsafe(`drop table if exists invoice_line`);
+    }
+  });
+
+  test("completes tables after from", async () => {
+    const s = await open([connection("local", "local")]);
+    await connectFirst(s);
+    await s.mockInput.typeText("select * from shi");
+    const frame = await until(s, (f) => /tbl\s+shipment/.test(f));
+    expect(frame).not.toMatch(/tbl\s+victim/);
   });
 
   test("opens a JSON cell pretty-printed", async () => {

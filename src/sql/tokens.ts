@@ -2,13 +2,33 @@ import { loadModule, scanSync } from "libpg-query";
 
 export type TokenKind = "keyword" | "identifier" | "string" | "number" | "comment" | "operator" | "parameter" | "semicolon" | "other";
 
-export type Token = { start: number; end: number; kind: TokenKind; text: string };
+export type Token = { start: number; end: number; kind: TokenKind; text: string; keyword: string };
 
 export type Scan = { tokens: Token[]; scannedTo: number };
 
 export const ready: Promise<void> = loadModule();
 
+let last: { text: string; scan: Scan } | null = null;
+
 export function scan(text: string): Scan {
+  if (last?.text === text) return last.scan;
+  const result = scanUncached(text);
+  last = { text, scan: result };
+  return result;
+}
+
+const keywordKinds = new Map<string, string>();
+
+export function keywordKind(word: string): string {
+  const cached = keywordKinds.get(word);
+  if (cached !== undefined) return cached;
+  const tokens = tryScan(word);
+  const kind = tokens?.length === 1 ? tokens[0]!.keyword : "NO_KEYWORD";
+  keywordKinds.set(word, kind);
+  return kind;
+}
+
+function scanUncached(text: string): Scan {
   const whole = tryScan(text);
   if (whole) return { tokens: whole, scannedTo: text.length };
 
@@ -34,6 +54,7 @@ function tryScan(text: string): Token[] | null {
     end: charAt[t.end] ?? text.length,
     kind: kindOf(t.tokenName, t.keywordName),
     text: t.text,
+    keyword: t.keywordName,
   }));
 }
 

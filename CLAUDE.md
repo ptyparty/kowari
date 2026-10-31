@@ -12,7 +12,7 @@ Default to using Bun instead of Node.js.
 - `src/agent/read-only.ts`: opens an agent read-only connection and runs each statement through the gate, a read-only transaction that always rolls back, and the row and byte caps.
 - `src/cli.ts`: the `kowari` CLI Claude uses (`connections`, `query`, `tables`, `describe`); every command obeys the connection's agent level.
 - `src/agent/session.ts`: opens a connection for Claude according to its agent level; `catalog.ts` has the table listing and description queries.
-- `src/sql/`: Postgres's scanner (from libpg-query) as tokens with character offsets, and statement splitting on the semicolons it sees.
+- `src/sql/`: Postgres's scanner (from libpg-query) as tokens with character offsets, statement splitting on the semicolons it sees, the catalog read on connect, and completion (`complete.ts`, a pure function of text, cursor and catalog).
 - `src/tui/`: the TUI (`kowari` with no arguments): connection screen, workspace, result grid, the human's database session.
 - `src/format.ts`: text and JSON output for results.
 - `src/connections/`: resolves the connection list for a worktree from your config, the repo's `.kowari.toml`, and the worktree's `.env`, including what Claude may do with each.
@@ -27,3 +27,4 @@ Default to using Bun instead of Node.js.
 - postgres.js runs `sql.unsafe(text)` without parameters on the simple protocol, which accepts many statements. Anything that runs agent SQL passes `{ simple: false }`.
 - TUI tests drive `App` on `createTestRenderer`. `waitForFrame` gives up after a number of render passes, not a time, so a frame that waits on the database needs a polling loop with real sleeps (`until` in `test/support/frames.ts`).
 - The editor's highlight offsets do not count newlines; `App.highlight` converts the scanner's offsets.
+- The editor's cursor and `setCursor` columns are display cells (tabs and wide characters count more than one); `App.cursorIndex` and `App.position` convert to and from string indexes.

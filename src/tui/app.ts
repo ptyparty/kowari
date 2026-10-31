@@ -14,6 +14,9 @@ import {
 import { listTables } from "../agent/catalog.ts";
 import { type Resolution, type ResolvedConnection } from "../connections/resolve.ts";
 import { displayValue } from "../format.ts";
+import { emptyCatalog, loadCatalog, type Catalog } from "../sql/catalog.ts";
+import { complete, matchesPrefix, type Completion, type CompletionKind, type CompletionResult } from "../sql/complete.ts";
+import { quoteIdent } from "../sql/ident.ts";
 import { statementAt, statementText } from "../sql/statements.ts";
 import { scan, type TokenKind } from "../sql/tokens.ts";
 import { Database, type Run } from "./database.ts";
@@ -36,6 +39,20 @@ type Detail = { title: string; lines: string[]; top: number };
 
 type Message = { text: string; kind: "info" | "error" };
 
+type Popup = { result: CompletionResult; index: number };
+
+const popupRows = 8;
+
+const kindLabel: Record<CompletionKind, string> = {
+  column: "col",
+  table: "tbl",
+  view: "view",
+  schema: "sch",
+  alias: "as",
+  function: "fn",
+  keyword: "kw",
+};
+
 export class App {
   private readonly banner: TextRenderable;
   private readonly connectionsScreen: BoxRenderable;
@@ -51,6 +68,8 @@ export class App {
   private readonly resultsBox: BoxRenderable;
   private readonly resultsText: TextRenderable;
   private readonly status: TextRenderable;
+  private readonly popupBox: BoxRenderable;
+  private readonly popupText: TextRenderable;
   private readonly styleIds: Partial<Record<TokenKind, number>> = {};
 
   private resolution: Resolution | null = null;
@@ -65,6 +84,10 @@ export class App {
   private focus: Pane = "editor";
   private message: Message | null = null;
   private connectAttempt = 0;
+  private catalog: Catalog = emptyCatalog;
+  private popup: Popup | null = null;
+  private acceptedText: string | null = null;
+  private userRunning = false;
 
   constructor(
     private readonly renderer: CliRenderer,
@@ -124,7 +147,11 @@ export class App {
       syntaxStyle: syntax,
       placeholder: "select …   (Ctrl-Enter runs the statement under the cursor)",
       placeholderColor: theme.muted,
-      onContentChange: () => this.highlight(),
+      onContentChange: () => {
+        this.highlight();
+        this.completeAfterEdit();
+      },
+      onCursorChange: () => this.cursorMoved(),
     });
     this.editorBox.add(this.editor);
     this.resultsBox = pane(renderer, "Results", { height: "55%", onSizeChange: () => this.renderResults() });
@@ -137,10 +164,25 @@ export class App {
 
     this.status = new TextRenderable(renderer, { content: "", height: 1, wrapMode: "none", flexShrink: 0 });
 
+    this.popupBox = new BoxRenderable(renderer, {
+      position: "absolute",
+      zIndex: 10,
+      visible: false,
+      border: true,
+      borderStyle: "rounded",
+      borderColor: theme.border,
+      backgroundColor: theme.surface,
+      paddingLeft: 1,
+      paddingRight: 1,
+    });
+    this.popupText = new TextRenderable(renderer, { content: "", wrapMode: "none" });
+    this.popupBox.add(this.popupText);
+
     frame.add(this.banner);
     frame.add(this.connectionsScreen);
     frame.add(this.workspace);
     frame.add(this.status);
+    frame.add(this.popupBox);
     renderer.root.add(frame);
   }
 
@@ -197,6 +239,10 @@ export class App {
       this.showScreen("connections");
       return;
     }
+    if (this.focus === "editor" && this.completionKey(key)) {
+      key.preventDefault();
+      return;
+    }
     if (key.name === "tab") {
       key.preventDefault();
       this.cycleFocus(key.shift ? -1 : 1);
@@ -210,6 +256,160 @@ export class App {
     if (this.focus === "tables") this.tablesKey(key);
     else if (this.focus === "results") this.resultsKey(key);
   };
+
+  private completionKey(key: KeyEvent): boolean {
+    if (key.ctrl && key.name === "space") {
+      this.openCompletion(true);
+      return true;
+    }
+    if (!this.popup) return false;
+    switch (key.name) {
+      case "up":
+        this.popup.index = Math.max(0, this.popup.index - 1);
+        this.renderPopup();
+        return true;
+      case "down":
+        this.popup.index = Math.min(this.popup.result.items.length - 1, this.popup.index + 1);
+        this.renderPopup();
+        return true;
+      case "tab":
+        if (key.shift) this.acceptCompletion();
+        else this.completeCommonPrefix();
+        return true;
+      case "escape":
+        this.closeCompletion();
+        return true;
+      case "left":
+      case "right":
+      case "home":
+      case "end":
+      case "return":
+        this.closeCompletion();
+        return false;
+      default:
+        return false;
+    }
+  }
+
+  private completeAfterEdit(): void {
+    if (this.focus !== "editor" || !this.connected) return;
+    const text = this.editor.plainText;
+    if (text === this.acceptedText) return;
+    this.acceptedText = null;
+    const cursor = this.cursorIndex(text);
+    const typed = text[cursor - 1] ?? "";
+    if (this.popup || /[A-Za-z0-9_$.]/.test(typed)) this.openCompletion(false);
+  }
+
+  private openCompletion(explicit: boolean): void {
+    const text = this.editor.plainText;
+    const result = complete(text, this.cursorIndex(text), this.catalog);
+    const worthShowing = result !== null && result.items.length > 0 && (explicit || result.word.length > 0 || text[result.from - 1] === ".");
+    const exactOnly = result?.items.length === 1 && result.items[0]!.insert === result.word;
+    if (!worthShowing || exactOnly) {
+      this.closeCompletion();
+      return;
+    }
+    this.popup = { result, index: 0 };
+    this.renderPopup();
+  }
+
+  private completeCommonPrefix(): void {
+    const fresh = this.freshCompletion();
+    if (!fresh) return;
+    const candidates = fresh.result.items.filter((i) => matchesPrefix(i, fresh.result.word));
+    if (candidates.length === 1) {
+      this.replaceWord(fresh.result, candidates[0]!.insert, true);
+      return;
+    }
+    const word = fresh.result.word.toLowerCase();
+    if (!candidates.every((i) => i.insert.toLowerCase().startsWith(word))) return;
+    const prefix = commonPrefix(candidates.map((i) => i.insert));
+    if (prefix.length > word.length) this.replaceWord(fresh.result, prefix, false);
+  }
+
+  private acceptCompletion(): void {
+    const fresh = this.freshCompletion();
+    if (fresh?.selected) this.replaceWord(fresh.result, fresh.selected.insert, true);
+  }
+
+  private freshCompletion(): { result: CompletionResult; selected: Completion | null } | null {
+    const popup = this.popup;
+    if (!popup) return null;
+    const text = this.editor.plainText;
+    const result = complete(text, this.cursorIndex(text), this.catalog);
+    if (!result || result.from !== popup.result.from) {
+      this.closeCompletion();
+      return null;
+    }
+    const was = popup.result.items[popup.index];
+    const selected = result.items.find((i) => was && i.kind === was.kind && i.label === was.label) ?? result.items[0] ?? null;
+    return { result, selected };
+  }
+
+  private cursorMoved(): void {
+    if (!this.popup) return;
+    const text = this.editor.plainText;
+    const result = complete(text, this.cursorIndex(text), this.catalog);
+    if (!result || result.from !== this.popup.result.from) this.closeCompletion();
+  }
+
+  private replaceWord(result: CompletionResult, insert: string, accept: boolean): void {
+    if (accept) this.closeCompletion();
+    const text = this.editor.plainText;
+    const from = this.position(text, result.from);
+    const to = this.position(text, result.to);
+    this.editor.editBuffer.deleteRange(from.row, from.col, to.row, to.col);
+    this.editor.editBuffer.setCursor(from.row, from.col);
+    this.editor.editBuffer.insertText(insert);
+    this.acceptedText = accept ? this.editor.plainText : null;
+    this.highlight();
+    if (accept && insert.endsWith(".")) this.openCompletion(true);
+  }
+
+  private closeCompletion(): void {
+    this.popup = null;
+    this.popupBox.visible = false;
+  }
+
+  private position(text: string, index: number): { row: number; col: number } {
+    const before = text.slice(0, index);
+    const row = before.split("\n").length - 1;
+    const lineStart = before.lastIndexOf("\n") + 1;
+    return { row, col: this.editor.editBuffer.measureText(text.slice(lineStart, index)) };
+  }
+
+  private renderPopup(): void {
+    const popup = this.popup;
+    if (!popup) return;
+    const items = popup.result.items;
+    const top = Math.max(0, Math.min(popup.index - Math.floor(popupRows / 2), items.length - popupRows));
+    const shown = items.slice(top, top + popupRows);
+    const labelWidth = Math.min(32, Math.max(...shown.map((i) => i.label.length)));
+    const detailWidth = Math.min(36, Math.max(0, ...shown.map((i) => i.detail.length)));
+    const lines = shown.map((item, i) => {
+      const selected = top + i === popup.index;
+      const label = item.label.length > labelWidth ? `${item.label.slice(0, labelWidth - 1)}…` : item.label.padEnd(labelWidth);
+      const detail = item.detail.length > detailWidth ? `${item.detail.slice(0, detailWidth - 1)}…` : item.detail.padEnd(detailWidth);
+      const row = [fg(theme.muted)(kindLabel[item.kind].padEnd(5)), fg(theme.text)(label), fg(theme.muted)(`  ${detail}`)];
+      return selected ? row.map((chunk) => bg(theme.selection)(chunk)) : row;
+    });
+    this.popupText.content = styled(joinLines(lines));
+
+    const width = 5 + labelWidth + 2 + detailWidth + 4;
+    const height = shown.length + 2;
+    const text = this.editor.plainText;
+    const anchor = this.position(text, popup.result.from);
+    const cursorRow = this.editor.visualCursor.visualRow - this.editor.scrollY;
+    const x = Math.max(0, Math.min(this.renderer.width - width, this.editor.screenX + anchor.col - 7));
+    const below = this.editor.screenY + cursorRow + 1;
+    const y = below + height <= this.renderer.height - 1 ? below : Math.max(0, this.editor.screenY + cursorRow - height);
+    this.popupBox.left = x;
+    this.popupBox.top = y;
+    this.popupBox.width = width;
+    this.popupBox.height = height;
+    this.popupBox.visible = true;
+  }
 
   private connectionsKey(key: KeyEvent): void {
     key.preventDefault();
@@ -239,7 +439,7 @@ export class App {
       key.preventDefault();
       const row = this.tables?.rows[this.tableIndex];
       if (!row) return;
-      if (this.connected?.db.busy) {
+      if (this.userRunning) {
         this.say("a statement is still running (Ctrl-C cancels it)", "error");
         return;
       }
@@ -296,6 +496,7 @@ export class App {
     this.screen = screen;
     this.connectionsScreen.visible = screen === "connections";
     this.workspace.visible = screen === "workspace";
+    this.closeCompletion();
     if (screen === "workspace") this.setFocus(this.focus);
     else this.editor.blur();
     this.renderAll();
@@ -310,6 +511,7 @@ export class App {
     this.focus = next;
     if (next === "editor") this.editor.focus();
     else this.editor.blur();
+    this.closeCompletion();
     this.renderAll();
   }
 
@@ -342,6 +544,8 @@ export class App {
     this.detail = null;
     this.tables = null;
     await previous?.db.close().catch(() => {});
+    this.catalog = emptyCatalog;
+    this.closeCompletion();
     const tables = await listTables(async (q) => (await db.run(q)).result);
     if (this.connected?.db !== db) return;
     this.tables = tables.kind === "rows" ? tables : null;
@@ -349,11 +553,39 @@ export class App {
     this.message = null;
     this.focus = "editor";
     this.showScreen("workspace");
+    await this.refreshCatalog(db);
+  }
+
+  private async refreshTables(db: Database): Promise<void> {
+    const tables = await listTables(async (q) => (await db.run(q)).result);
+    if (this.connected?.db !== db || tables.kind !== "rows") return;
+    this.tables = tables;
+    this.tableIndex = Math.min(this.tableIndex, Math.max(0, tables.rows.length - 1));
+    this.renderTables();
+  }
+
+  private async refreshCatalog(db: Database): Promise<void> {
+    const loading: Message = { text: "reading the catalog for completion…", kind: "info" };
+    if (this.catalog === emptyCatalog) {
+      this.message = loading;
+      this.renderStatus();
+    }
+    try {
+      const catalog = await loadCatalog(async (q) => (await db.run(q, 1_000_000)).result);
+      if (this.connected?.db !== db) return;
+      this.catalog = catalog;
+      if (this.message === loading) {
+        this.message = null;
+        this.renderStatus();
+      }
+    } catch (e) {
+      if (this.connected?.db === db) this.say(`completion is unavailable: ${e instanceof Error ? e.message : String(e)}`, "error");
+    }
   }
 
   private async runStatementUnderCursor(): Promise<void> {
     if (!this.connected) return;
-    if (this.connected.db.busy) {
+    if (this.userRunning) {
       this.say("a statement is still running (Ctrl-C cancels it)", "error");
       return;
     }
@@ -366,9 +598,18 @@ export class App {
 
     this.say("running…", "info");
     const db = this.connected.db;
-    const run = await db.run(statementText(text, span));
+    this.userRunning = true;
+    let run: Run;
+    try {
+      run = await db.run(statementText(text, span));
+    } finally {
+      this.userRunning = false;
+    }
     if (this.connected?.db !== db) return;
     this.run = run;
+    if (run.result.kind === "rows" && /^(CREATE|ALTER|DROP|SET|RESET|COMMENT|GRANT|REVOKE|RENAME)/.test(run.result.command ?? "")) {
+      void this.refreshTables(db).then(() => this.refreshCatalog(db));
+    }
     this.grid = { row: 0, col: 0, top: 0, left: 0 };
     this.detail = null;
     this.message = null;
@@ -557,7 +798,7 @@ export class App {
     const hints =
       this.screen === "connections"
         ? " ↑↓ choose · Enter connect · r reload · Ctrl-Q quit"
-        : " Ctrl-Enter run · Tab pane · Ctrl-O connections · Ctrl-C cancel · Ctrl-Q quit";
+        : " Ctrl-Enter run · Ctrl-Space complete · Tab pane · Ctrl-O connections · Ctrl-C cancel · Ctrl-Q quit";
     this.status.content = styled([...message, fg(theme.muted)(hints)]);
   }
 }
@@ -620,6 +861,17 @@ export function detailText(value: unknown): string {
   return displayValue(value);
 }
 
+function commonPrefix(values: string[]): string {
+  if (values.length === 0) return "";
+  let prefix = values[0]!;
+  for (const value of values.slice(1)) {
+    let i = 0;
+    while (i < prefix.length && i < value.length && prefix[i]!.toLowerCase() === value[i]!.toLowerCase()) i += 1;
+    prefix = prefix.slice(0, i);
+  }
+  return prefix;
+}
+
 function newlineCounts(text: string): number[] {
   const counts = new Array<number>(text.length + 1);
   let seen = 0;
@@ -630,7 +882,4 @@ function newlineCounts(text: string): number[] {
   return counts;
 }
 
-function quoteIdent(name: string): string {
-  return /^[a-z_][a-z0-9_]*$/.test(name) ? name : `"${name.replaceAll('"', '""')}"`;
-}
 
