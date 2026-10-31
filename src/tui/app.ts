@@ -14,7 +14,9 @@ import {
   type TextChunk,
 } from "@opentui/core";
 import { listTables } from "../agent/catalog.ts";
-import { type Resolution, type ResolvedConnection } from "../connections/resolve.ts";
+import { addKeyringDenies, checkKeyringDenies, claudeSettingsPath, type DenyCheck } from "../claude/deny.ts";
+import { keyringKey, systemKeyring, type Keyring } from "../connections/keyring.ts";
+import { type ConnectionParams, type Resolution, type ResolvedConnection } from "../connections/resolve.ts";
 import { displayValue } from "../format.ts";
 import { emptyCatalog, loadCatalog, type Catalog } from "../sql/catalog.ts";
 import { complete, matchesPrefix, type Completion, type CompletionKind, type CompletionResult } from "../sql/complete.ts";
@@ -31,9 +33,15 @@ const selectionFg = RGBA.fromHex(theme.text);
 
 export type AppOptions = {
   resolve: () => Promise<Resolution>;
-  open?: (connection: ResolvedConnection) => Promise<Database>;
+  open?: (params: ConnectionParams) => Promise<Database>;
+  keyring?: Keyring;
+  claudeSettings?: string;
   onQuit: () => void;
 };
+
+type PasswordPrompt = { connection: ResolvedConnection; value: string; error: string | null };
+
+type PasswordSource = "config" | "keyring" | "asks" | "keyring locked" | "no keyring";
 
 type Screen = "connections" | "workspace";
 
@@ -90,9 +98,15 @@ export class App {
   private focus: Pane = "editor";
   private message: Message | null = null;
   private connectAttempt = 0;
+  private afterConnect: Message | null = null;
   private catalog: Catalog = emptyCatalog;
   private popup: Popup | null = null;
   private acceptedText: string | null = null;
+  private prompt: PasswordPrompt | null = null;
+  private passwordSources = new Map<string, PasswordSource>();
+  private denies: DenyCheck | null = null;
+  private confirmingDenies = false;
+  private confirmingForget = false;
   private userRunning = false;
   private readonly helix: Helix;
 
@@ -122,12 +136,15 @@ export class App {
       width: "100%",
       height: "100%",
       backgroundColor: theme.background,
-      onSizeChange: () => this.renderBanner(),
+      onSizeChange: () => {
+        this.renderBanner();
+        this.renderConnections();
+      },
     });
     this.banner = new TextRenderable(renderer, { content: "", height: 1, wrapMode: "none", flexShrink: 0 });
 
     this.connectionsScreen = new BoxRenderable(renderer, { flexDirection: "row", flexGrow: 1 });
-    this.listBox = pane(renderer, "Connections", { width: "45%" });
+    this.listBox = pane(renderer, "Connections", { width: 44, flexShrink: 0 });
     this.listText = new TextRenderable(renderer, { content: "", wrapMode: "none", flexGrow: 1 });
     this.listBox.add(this.listText);
     this.inspectBox = pane(renderer, "Details", { flexGrow: 1 });
@@ -244,13 +261,48 @@ export class App {
     this.editor.editBuffer.setCursor(lines.length - 1, this.editor.editBuffer.measureText(last));
   }
 
+  private get keyring(): Keyring {
+    return this.options.keyring ?? systemKeyring;
+  }
+
   private async reload(): Promise<void> {
     this.resolution = await this.options.resolve();
     this.connectionIndex = Math.min(this.connectionIndex, Math.max(0, this.resolution.connections.length - 1));
     this.renderAll();
+    await this.refreshPasswordSources().catch(() => {});
+    this.denies = await this.checkDenies();
+    this.renderConnections();
+  }
+
+  private async checkDenies(): Promise<DenyCheck> {
+    const settingsPath = this.options.claudeSettings ?? claudeSettingsPath();
+    try {
+      return await checkKeyringDenies(settingsPath);
+    } catch (e) {
+      return { settingsPath, missing: [], problem: `could not read ${settingsPath} (${e instanceof Error ? e.message : String(e)})` };
+    }
+  }
+
+  private async refreshPasswordSources(): Promise<void> {
+    const state = await this.keyring.state();
+    const sources = new Map<string, PasswordSource>();
+    for (const c of this.resolution?.connections ?? []) {
+      if (c.target.kind !== "ready") continue;
+      if (c.target.params.password !== null) sources.set(c.name, "config");
+      else if (state === "locked") sources.set(c.name, "keyring locked");
+      else if (state === "unavailable") sources.set(c.name, "no keyring");
+      else sources.set(c.name, (await this.keyring.get(keyringKey(c.target.params))) === null ? "asks" : "keyring");
+    }
+    this.passwordSources = sources;
   }
 
   private readonly onPaste = (event: PasteEvent): void => {
+    if (this.prompt) {
+      event.preventDefault();
+      this.prompt.value += new TextDecoder().decode(event.bytes).replace(/[\r\n]+$/, "");
+      this.renderConnections();
+      return;
+    }
     if (this.screen !== "workspace" || this.focus !== "editor" || this.helix.mode !== "normal") return;
     event.preventDefault();
     this.helix.pasteText(new TextDecoder().decode(event.bytes).replaceAll("\r\n", "\n").replaceAll("\r", "\n"));
@@ -474,6 +526,19 @@ export class App {
 
   private connectionsKey(key: KeyEvent): void {
     key.preventDefault();
+    if (this.prompt) return this.promptKey(key);
+    if (this.confirmingForget) {
+      this.confirmingForget = false;
+      if (key.name === "y") void this.forgetPassword();
+      else this.renderConnections();
+      return;
+    }
+    if (this.confirmingDenies) {
+      this.confirmingDenies = false;
+      if (key.name === "y") void this.addDenies();
+      else this.renderConnections();
+      return;
+    }
     const count = this.resolution?.connections.length ?? 0;
     const step = listStep(key);
     if (step !== 0) {
@@ -486,7 +551,56 @@ export class App {
       this.reload().catch((e: unknown) => this.say(`could not reload: ${e instanceof Error ? e.message : String(e)}`, "error"));
     } else if (key.name === "escape" && this.connected) {
       this.showScreen("workspace");
+    } else if (key.name === "f" && !key.shift && key.sequence === "f") {
+      const c = this.resolution?.connections[this.connectionIndex];
+      if (c && this.passwordSources.get(c.name) === "keyring") {
+        this.confirmingForget = true;
+        this.renderConnections();
+      }
+    } else if (isShifted(key, "d") && (this.denies?.missing.length ?? 0) > 0 && !this.denies?.problem) {
+      this.confirmingDenies = true;
+      this.renderConnections();
     }
+  }
+
+  private promptKey(key: KeyEvent): void {
+    const prompt = this.prompt!;
+    if (key.name === "escape") {
+      this.prompt = null;
+    } else if (key.name === "return") {
+      const typed = prompt.value;
+      this.prompt = null;
+      void this.connect(prompt.connection, typed);
+    } else if (key.name === "backspace") {
+      prompt.value = [...prompt.value].slice(0, -1).join("");
+    } else if (!key.ctrl && !key.meta && key.sequence && key.sequence.length >= 1 && key.sequence >= " ") {
+      prompt.value += key.sequence;
+    }
+    this.renderConnections();
+  }
+
+  private async forgetPassword(): Promise<void> {
+    const c = this.resolution?.connections[this.connectionIndex];
+    if (!c || c.target.kind !== "ready" || c.target.params.password !== null) return;
+    try {
+      await this.keyring.forget(keyringKey(c.target.params));
+      this.say(`forgot the stored password for ${c.name}`, "info");
+    } catch (e) {
+      this.say(`could not forget the password: ${e instanceof Error ? e.message : String(e)}`, "error");
+    }
+    await this.refreshPasswordSources();
+    this.renderConnections();
+  }
+
+  private async addDenies(): Promise<void> {
+    try {
+      const added = await addKeyringDenies(this.options.claudeSettings ?? claudeSettingsPath());
+      this.say(`added ${added.length} deny ${added.length === 1 ? "rule" : "rules"} to ${this.denies?.settingsPath}`, "info");
+    } catch (e) {
+      this.say(`could not add the rules: ${e instanceof Error ? e.message : String(e)}`, "error");
+    }
+    this.denies = await this.checkDenies();
+    this.renderConnections();
   }
 
   private tablesKey(key: KeyEvent): void {
@@ -578,23 +692,53 @@ export class App {
     this.renderAll();
   }
 
-  private async connect(connection: ResolvedConnection): Promise<void> {
+  private async connect(connection: ResolvedConnection, typed: string | null = null): Promise<void> {
     if (connection.target.kind === "unavailable") {
       this.say(`${connection.name} is unavailable: ${connection.target.reason}`, "error");
       return;
     }
-    const params = connection.target.params;
+    const params = { ...connection.target.params };
+    const key = keyringKey(params);
+    let fromKeyring = false;
+    if (params.password === null) {
+      if (typed !== null) {
+        params.password = typed;
+      } else {
+        params.password = await this.keyring.get(key);
+        fromKeyring = params.password !== null;
+        if (params.password === null) {
+          const state = await this.keyring.state();
+          this.askPassword(connection, state === "unlocked" ? null : "the keyring is locked or not running, so this password will not be stored");
+          return;
+        }
+      }
+    }
     const attempt = ++this.connectAttempt;
     this.say(`connecting to ${connection.name}…`, "info");
 
     let db: Database;
     try {
-      db = await (this.options.open ? this.options.open(connection) : Database.open(params));
+      db = await (this.options.open ? this.options.open(params) : Database.open(params));
     } catch (e) {
-      if (attempt === this.connectAttempt) {
-        this.say(`could not connect to ${connection.name}: ${e instanceof Error ? e.message : String(e)}`, "error");
+      if (attempt !== this.connectAttempt) return;
+      const message = e instanceof Error ? e.message : String(e);
+      if ((typed !== null || fromKeyring) && /password authentication failed|28P01/.test(message)) {
+        this.askPassword(connection, fromKeyring ? "the stored password was rejected" : "that password was rejected");
+        return;
       }
+      this.say(`could not connect to ${connection.name}: ${message}`, "error");
       return;
+    }
+    this.afterConnect = null;
+    if (typed !== null && (await this.keyring.state()) === "unlocked") {
+      try {
+        await this.keyring.set(key, typed);
+      } catch (e) {
+        this.afterConnect = { text: `connected, but the password was not stored: ${e instanceof Error ? e.message : String(e)}`, kind: "error" };
+      }
+      this.refreshPasswordSources().catch(() => {});
+    } else if (typed !== null) {
+      this.afterConnect = { text: "connected; the password was not stored, because the keyring is locked or not running", kind: "error" };
     }
     if (attempt !== this.connectAttempt) {
       await db.close().catch(() => {});
@@ -613,7 +757,7 @@ export class App {
     if (this.connected?.db !== db) return;
     this.tables = tables.kind === "rows" ? tables : null;
     this.tableIndex = 0;
-    this.message = null;
+    this.message = this.afterConnect;
     this.focus = "editor";
     this.showScreen("workspace");
     await this.refreshCatalog(db);
@@ -629,7 +773,7 @@ export class App {
 
   private async refreshCatalog(db: Database): Promise<void> {
     const loading: Message = { text: "reading the catalog for completion…", kind: "info" };
-    if (this.catalog === emptyCatalog) {
+    if (this.catalog === emptyCatalog && this.message === null) {
       this.message = loading;
       this.renderStatus();
     }
@@ -754,17 +898,78 @@ export class App {
       this.inspectText.content = this.problemsText();
       return;
     }
-    const nameWidth = Math.max("Name".length, ...connections.map((c) => c.name.length));
+    const fixedColumns = 4 + 2 + 14 + "approve-writes".length;
+    const longestName = Math.max("Name".length, ...connections.map((c) => c.name.length));
+    const maxListWidth = Math.max(fixedColumns + 12, Math.floor(this.renderer.width * 0.6));
+    this.listBox.width = Math.min(maxListWidth, longestName + fixedColumns + 4);
+    const nameWidth = Math.max(8, Math.min(longestName, maxListWidth - 4 - fixedColumns));
     const header: Line = [bold(fg(theme.muted)(`    ${"Name".padEnd(nameWidth + 2)}${"Environment".padEnd(14)}Claude`))];
     const rows = connections.map((c, i) => {
       const selected = i === this.connectionIndex;
       const marker = selected ? fg(theme.accent)("▸ ") : "  ";
       const active = this.connected?.connection.name === c.name ? fg(theme.good)("● ") : "  ";
-      const name = fg(c.target.kind === "unavailable" ? theme.muted : theme.text)(c.name.padEnd(nameWidth + 2));
+      const shown = c.name.length > nameWidth ? `${c.name.slice(0, nameWidth - 1)}…` : c.name;
+      const name = fg(c.target.kind === "unavailable" ? theme.muted : theme.text)(shown.padEnd(nameWidth + 2));
       return [marker, active, name, fg(environmentColor[c.environment])(c.environment.padEnd(14)), fg(levelColor[c.agent])(c.agent)];
     });
     this.listText.content = styled(joinLines([header, ...rows]));
-    this.inspectText.content = this.inspection(connections[this.connectionIndex]!);
+    this.inspectText.content = this.prompt
+      ? this.promptText(this.prompt)
+      : this.confirmingDenies
+        ? this.denyConfirmation()
+        : this.confirmingForget
+          ? styled(joinLines([[bold(fg(theme.warning)(`Forget the stored password for ${connections[this.connectionIndex]!.name}?`))], [], [fg(theme.muted)("You will be asked for it on the next connect.")], [], [fg(theme.muted)("y forgets it · any other key cancels")]]))
+        : this.inspection(connections[this.connectionIndex]!);
+  }
+
+  private askPassword(connection: ResolvedConnection, error: string | null): void {
+    this.prompt = { connection, value: "", error };
+    this.message = null;
+    this.renderAll();
+  }
+
+  private promptText(prompt: PasswordPrompt): StyledText {
+    const p = prompt.connection.target.kind === "ready" ? prompt.connection.target.params : null;
+    const lines: Line[] = [
+      [bold(fg(theme.text)(`Password for ${prompt.connection.name}`))],
+      [fg(theme.muted)(p ? `${p.user}@${p.host}:${p.port}/${p.database}` : "")],
+      [],
+      [fg(theme.text)("•".repeat([...prompt.value].length)), bg(theme.text)(" ")],
+      [],
+    ];
+    if (prompt.error) lines.push([fg(theme.error)(prompt.error)], []);
+    lines.push([fg(theme.muted)("Enter connects and stores it in your keyring · Esc cancels")]);
+    return styled(joinLines(lines));
+  }
+
+  private denyText(): Line[] {
+    const denies = this.denies;
+    if (!denies) return [];
+    if (denies.problem) return [[], [fg(theme.warning)(`Claude Code settings: ${denies.problem}`)]];
+    if (denies.missing.length === 0) return [];
+    return [
+      [],
+      [fg(theme.warning)(`Claude Code can run keyring tools: ${denies.missing.length} deny ${denies.missing.length === 1 ? "rule is" : "rules are"} missing from ${denies.settingsPath}. D adds them.`)],
+    ];
+  }
+
+  private denyConfirmation(): StyledText {
+    const denies = this.denies!;
+    return styled(
+      joinLines([
+        [bold(fg(theme.warning)("Keep Claude Code out of your keyring"))],
+        [],
+        [fg(theme.text)(`Add these to permissions.deny in ${denies.settingsPath}:`)],
+        [],
+        ...denies.missing.map((rule) => [fg(theme.text)(`  ${rule}`)]),
+        [],
+        [fg(theme.muted)("The rest of the file keeps its content, though it is rewritten as formatted JSON.")],
+        [fg(theme.muted)("These stop the usual keyring tools, not a script Claude writes itself;")],
+        [fg(theme.muted)("Claude Code's Bash sandbox, where on, blocks the keyring entirely.")],
+        [],
+        [fg(theme.muted)("y adds them · any other key cancels")],
+      ]),
+    );
   }
 
   private inspection(c: ResolvedConnection): StyledText {
@@ -777,7 +982,7 @@ export class App {
       lines.push(field("host", `${p.host}:${p.port}`));
       lines.push(field("database", p.database));
       lines.push(field("user", p.user));
-      lines.push(field("password", p.password === null ? "missing" : "set"));
+      lines.push(field("password", passwordLabel(this.passwordSources.get(c.name) ?? (p.password === null ? "asks" : "config"))));
       lines.push(field("sslmode", p.sslmode));
       if (p.sslrootcert) lines.push(field("sslrootcert", p.sslrootcert));
     } else {
@@ -787,7 +992,9 @@ export class App {
     lines.push(field("Claude", c.agent, levelColor[c.agent]));
     if (c.agentNote) lines.push(field("", c.agentNote, theme.warning));
     lines.push([]);
-    lines.push([fg(theme.muted)("Enter connects · r reloads config · Esc back")]);
+    const forget = this.passwordSources.get(c.name) === "keyring" ? " · f forgets the stored password" : "";
+    lines.push([fg(theme.muted)(`Enter connects · r reloads config${forget} · Esc back`)]);
+    lines.push(...this.denyText());
     const problems = this.resolution?.problems ?? [];
     if (problems.length > 0) {
       lines.push([]);
@@ -887,6 +1094,25 @@ function pane(renderer: CliRenderer, title: string, size: Record<string, unknown
     paddingLeft: 1,
     paddingRight: 1,
   });
+}
+
+function isShifted(key: KeyEvent, letter: string): boolean {
+  return key.sequence === letter.toUpperCase() || key.name === letter.toUpperCase() || (key.name === letter && key.shift);
+}
+
+function passwordLabel(source: PasswordSource): string {
+  switch (source) {
+    case "config":
+      return "set in config";
+    case "keyring":
+      return "stored in your keyring";
+    case "asks":
+      return "asks on connect, then stored in your keyring";
+    case "keyring locked":
+      return "keyring is locked; unlock it to connect";
+    case "no keyring":
+      return "no keyring running; asks on connect, not stored";
+  }
 }
 
 function setBorder(box: BoxRenderable, color: string): void {

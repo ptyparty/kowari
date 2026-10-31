@@ -1,3 +1,4 @@
+import { keyringKey, systemKeyring, type Keyring } from "../connections/keyring.ts";
 import type { ResolvedConnection } from "../connections/resolve.ts";
 import {
   defaultAgentLimits,
@@ -15,6 +16,7 @@ export type SessionOutcome = { kind: "open"; session: AgentSession } | { kind: "
 export async function openAgentSession(
   connection: ResolvedConnection,
   limits: AgentLimits = defaultAgentLimits,
+  keyring: Keyring = systemKeyring,
 ): Promise<SessionOutcome> {
   if (connection.target.kind === "unavailable") {
     return { kind: "refused", reason: `${connection.name} is unavailable: ${connection.target.reason}` };
@@ -24,7 +26,12 @@ export async function openAgentSession(
     return { kind: "refused", reason: `Claude has no access to ${connection.name}${note}` };
   }
 
-  const params = connection.target.params;
+  const params = { ...connection.target.params };
+  if (params.password === null) {
+    const stored = await keyring.get(keyringKey(params));
+    if (stored === null) return { kind: "refused", reason: await missingPassword(connection.name, keyring) };
+    params.password = stored;
+  }
   const layers =
     connection.agent === "read-only"
       ? undefined
@@ -66,4 +73,15 @@ function awaitingApproval(connection: ReadOnlyConnection): (text: string) => Pro
       reason: `${blocked}. Writes on this connection need approval in the kowari TUI, which does not exist yet`,
     };
   };
+}
+
+async function missingPassword(name: string, keyring: Keyring): Promise<string> {
+  switch (await keyring.state()) {
+    case "locked":
+      return `no password for ${name}: the keyring is locked; unlock it (see the kowari notebook's password page) and try again`;
+    case "unavailable":
+      return `no password for ${name}: no keyring is running, and the connection has no password in its config`;
+    case "unlocked":
+      return `no password for ${name}: connect once from the kowari TUI to store one in the keyring`;
+  }
 }

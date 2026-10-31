@@ -15,6 +15,8 @@ Default to using Bun instead of Node.js.
 - `src/sql/`: Postgres's scanner (from libpg-query) as tokens with character offsets, statement splitting on the semicolons it sees, the catalog read on connect, and completion (`complete.ts`, a pure function of text, cursor and catalog).
 - `src/tui/`: the TUI (`kowari` with no arguments): connection screen, workspace, result grid, the human's database session.
 - `src/format.ts`: text and JSON output for results.
+- `src/connections/keyring.ts`: passwords in the system keyring (`Bun.secrets`), with a D-Bus lock check so kowari never sets off an unlock prompt; `memoryKeyring` for tests.
+- `src/claude/deny.ts`: checks and adds the Claude Code deny rules that keep keyring tools away from Claude.
 - `src/connections/`: resolves the connection list for a worktree from your config, the repo's `.kowari.toml`, and the worktree's `.env`, including what Claude may do with each.
 - `skills/kowari/`: the agent skill.
 - `test/cli.test.ts`: runs the CLI end to end from a scratch git repo against a fixture database.
@@ -28,3 +30,4 @@ Default to using Bun instead of Node.js.
 - TUI tests drive `App` on `createTestRenderer`. `waitForFrame` gives up after a number of render passes, not a time, so a frame that waits on the database needs a polling loop with real sleeps (`until` in `test/support/frames.ts`).
 - The editor's highlight offsets do not count newlines; `App.highlight` converts the scanner's offsets.
 - The editor's cursor and `setCursor` columns are display cells (tabs and wide characters count more than one); `App.cursorIndex` and `App.position` convert to and from string indexes.
+- Tests never touch the real keyring or `~/.claude/settings.json`: pass `memoryKeyring()` and a scratch `claudeSettings` path to `App`, and a keyring to `openAgentSession`.

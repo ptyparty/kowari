@@ -1,5 +1,10 @@
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { createTestRenderer, type TestRendererSetup } from "@opentui/core/testing";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { keyringDenyRules } from "../src/claude/deny.ts";
+import { keyringKey, memoryKeyring } from "../src/connections/keyring.ts";
 import type { Resolution, ResolvedConnection } from "../src/connections/resolve.ts";
 import { ready } from "../src/sql/tokens.ts";
 import { App } from "../src/tui/app.ts";
@@ -11,9 +16,12 @@ let db: FixtureDatabase;
 let setup: TestRendererSetup | undefined;
 let app: App | undefined;
 let quits = 0;
+let scratch: string;
+let keyring = memoryKeyring();
 
 beforeAll(async () => {
   await ready;
+  scratch = await mkdtemp(path.join(os.tmpdir(), "kowari-tui-"));
   fixture = await makeFixture();
   db = await fixture.freshDatabase();
   await db.admin.unsafe(`
@@ -25,6 +33,7 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  await rm(scratch, { recursive: true, force: true });
   await fixture?.teardown();
 });
 
@@ -35,7 +44,7 @@ afterEach(async () => {
   setup = undefined;
 });
 
-function connection(name: string, environment: ResolvedConnection["environment"], ready = true): ResolvedConnection {
+function connection(name: string, environment: ResolvedConnection["environment"], ready = true, password: string | null = new URL(adminUrl).password): ResolvedConnection {
   const u = new URL(adminUrl);
   return {
     name,
@@ -44,19 +53,19 @@ function connection(name: string, environment: ResolvedConnection["environment"]
     agent: "read-only",
     agentNote: null,
     target: ready
-      ? { kind: "ready", params: { host: u.hostname, port: Number(u.port), database: db.name, user: u.username, password: u.password, sslmode: "prefer", sslrootcert: null } }
+      ? { kind: "ready", params: { host: u.hostname, port: Number(u.port), database: db.name, user: u.username, password, sslmode: "prefer", sslrootcert: null } }
       : { kind: "unavailable", reason: "APP_DB_PORT not set" },
   };
 }
 
-async function open(connections: ResolvedConnection[]): Promise<TestRendererSetup> {
+async function open(connections: ResolvedConnection[], claudeSettings = path.join(scratch, "settings-ok.json")): Promise<TestRendererSetup> {
   setup = await createTestRenderer({ width: 110, height: 24, kittyKeyboard: true });
   const resolution: Resolution = {
     worktree: { root: "/work/app", identity: "github.com/example/app", identityFromRemote: true, composeServices: new Set() },
     connections,
     problems: [],
   };
-  app = new App(setup.renderer, { resolve: async () => resolution, onQuit: () => (quits += 1) });
+  app = new App(setup.renderer, { resolve: async () => resolution, onQuit: () => (quits += 1), keyring, claudeSettings });
   await app.start();
   await until(setup, (f) => f.includes("Connections"));
   return setup;
@@ -76,6 +85,83 @@ async function connectFirst(s: TestRendererSetup): Promise<string> {
 }
 
 describe("kowari TUI", () => {
+  beforeAll(async () => {
+    await Bun.write(path.join(scratch, "settings-ok.json"), JSON.stringify({ permissions: { deny: keyringDenyRules } }));
+  });
+
+  test("asks for a missing password, connects, and stores it in the keyring", async () => {
+    keyring = memoryKeyring();
+    const c = connection("staging", "testing", true, null);
+    const s = await open([c]);
+    await until(s, (f) => f.includes("asks on connect"));
+    s.mockInput.pressEnter();
+    await until(s, (f) => f.includes("Password for staging"));
+    await s.mockInput.typeText("wrong");
+    s.mockInput.pressEnter();
+    await until(s, (f) => f.includes("that password was rejected"));
+    await s.mockInput.typeText(new URL(adminUrl).password);
+    s.mockInput.pressEnter();
+    await until(s, (f) => f.includes("TESTING · staging"));
+    if (c.target.kind !== "ready") throw new Error("unreachable");
+    expect(keyring.entries.get(keyringKey(c.target.params))).toBe(new URL(adminUrl).password);
+  });
+
+  test("uses a stored password, asks again when it is rejected, and f forgets it", async () => {
+    const c = connection("staging", "testing", true, null);
+    if (c.target.kind !== "ready") throw new Error("unreachable");
+    keyring = memoryKeyring({ [keyringKey(c.target.params)]: "stale" });
+    const s = await open([c]);
+    await until(s, (f) => f.includes("stored in your keyring"));
+    s.mockInput.pressEnter();
+    await until(s, (f) => f.includes("the stored password was rejected"));
+    s.mockInput.pressEscape();
+    s.mockInput.pressKey("f");
+    await until(s, (f) => f.includes("Forget the stored password for staging?"));
+    s.mockInput.pressKey("y");
+    await until(s, (f) => f.includes("asks on connect"));
+    expect(keyring.entries.size).toBe(0);
+  });
+
+  test("a password can be pasted into the prompt", async () => {
+    keyring = memoryKeyring();
+    const s = await open([connection("staging", "testing", true, null)]);
+    await until(s, (f) => f.includes("asks on connect"));
+    s.mockInput.pressEnter();
+    await until(s, (f) => f.includes("Password for staging"));
+    await s.mockInput.pasteBracketedText(new URL(adminUrl).password);
+    await until(s, (f) => f.includes("•".repeat(new URL(adminUrl).password.length)));
+    s.mockInput.pressEnter();
+    await until(s, (f) => f.includes("TESTING · staging"));
+  });
+
+  test("with the keyring locked, it still asks, says the password will not be stored, and does not store it", async () => {
+    keyring = memoryKeyring({}, "locked");
+    const s = await open([connection("staging", "testing", true, null)]);
+    await until(s, (f) => f.includes("keyring is locked"));
+    s.mockInput.pressEnter();
+    await until(s, (f) => f.includes("the keyring is locked or not running, so this password will"));
+    await s.mockInput.typeText(new URL(adminUrl).password);
+    s.mockInput.pressEnter();
+    const frame = await until(s, (f) => f.includes("TESTING · staging"));
+    expect(frame).toContain("the password was not stored");
+    expect(keyring.entries.size).toBe(0);
+  });
+
+  test("offers to add the keyring deny rules to Claude Code's settings", async () => {
+    keyring = memoryKeyring();
+    const settings = path.join(scratch, "settings-missing.json");
+    await Bun.write(settings, JSON.stringify({ model: "opus", permissions: { deny: ["Bash(rm -rf *)"] } }));
+    const s = await open([connection("local", "local")], settings);
+    await until(s, (f) => f.includes("4 deny rules are missing"));
+    s.mockInput.pressKey("D", { shift: true });
+    await until(s, (f) => f.includes("y adds them"));
+    s.mockInput.pressKey("y");
+    await until(s, (f) => !f.includes("deny rules are missing") && !f.includes("y adds them"));
+    const after = JSON.parse(await readFile(settings, "utf8"));
+    expect(after.model).toBe("opus");
+    expect(after.permissions.deny).toEqual(["Bash(rm -rf *)", ...keyringDenyRules]);
+  });
+
   test("starts on the connection screen and inspects the selected connection", async () => {
     const s = await open([connection("local", "local"), connection("staging", "testing", false)]);
     let frame = await until(s, (f) => f.includes("Details"));
@@ -87,6 +173,14 @@ describe("kowari TUI", () => {
     s.mockInput.pressArrow("down");
     frame = await until(s, (f) => f.includes("APP_DB_PORT not set"));
     expect(frame).toContain("testing");
+  });
+
+  test("the connection list keeps its environment and Claude columns in a narrow terminal", async () => {
+    const s = await open([connection("a-rather-long-connection-name-for-staging", "testing"), connection("local", "local")]);
+    await until(s, (f) => f.includes("Details"));
+    s.resize(80, 24);
+    const frame = await until(s, (f) => /▸\s+a-rather.*…\s+testing\s+read-only/.test(f));
+    expect(frame).toMatch(/local\s+local\s+read-only/);
   });
 
   test("connects, runs the statement under the cursor with Ctrl-Enter, and shows the grid", async () => {

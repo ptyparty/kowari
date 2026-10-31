@@ -1,6 +1,7 @@
 import { createTestRenderer, type TestRendererSetup } from "@opentui/core/testing";
 import path from "node:path";
 import type { Resolution, ResolvedConnection } from "../src/connections/resolve.ts";
+import { memoryKeyring } from "../src/connections/keyring.ts";
 import { ready } from "../src/sql/tokens.ts";
 import { App } from "../src/tui/app.ts";
 import { adminUrl, makeFixture } from "../test/escape/fixture.ts";
@@ -63,7 +64,7 @@ async function shoot(s: TestRendererSetup, name: string): Promise<void> {
 
 async function session(pick: number, run: (s: TestRendererSetup) => Promise<void>): Promise<void> {
   const s = await createTestRenderer({ width: 120, height: 32, kittyKeyboard: true });
-  const app = new App(s.renderer, { resolve: async () => resolution, onQuit: () => {} });
+  const app = new App(s.renderer, { resolve: async () => resolution, onQuit: () => {}, keyring: memoryKeyring(), claudeSettings: "/nonexistent/kowari-screens/settings.json" });
   await app.start();
   await until(s, (f) => f.includes("Details"));
   for (let i = 0; i < pick; i++) s.mockInput.pressArrow("down");
