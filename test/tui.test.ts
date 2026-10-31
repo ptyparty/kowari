@@ -96,7 +96,10 @@ describe("kowari TUI", () => {
     await until(s, (f) => f.includes("asks on connect"));
     s.mockInput.pressEnter();
     await until(s, (f) => f.includes("Password for staging"));
+    s.mockInput.pressEnter();
+    await until(s, (f) => f.includes("nothing typed yet"));
     await s.mockInput.typeText("wrong");
+    await until(s, (f) => f.includes("•••••") && f.includes("5 characters"));
     s.mockInput.pressEnter();
     await until(s, (f) => f.includes("that password was rejected"));
     await s.mockInput.typeText(new URL(adminUrl).password);

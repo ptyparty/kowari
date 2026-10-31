@@ -568,9 +568,13 @@ export class App {
     if (key.name === "escape") {
       this.prompt = null;
     } else if (key.name === "return") {
-      const typed = prompt.value;
-      this.prompt = null;
-      void this.connect(prompt.connection, typed);
+      if (prompt.value === "") {
+        prompt.error = "nothing typed yet; type the password, then Enter";
+      } else {
+        const typed = prompt.value;
+        this.prompt = null;
+        void this.connect(prompt.connection, typed);
+      }
     } else if (key.name === "backspace") {
       prompt.value = [...prompt.value].slice(0, -1).join("");
     } else if (!key.ctrl && !key.meta && key.sequence && key.sequence.length >= 1 && key.sequence >= " ") {
@@ -930,11 +934,18 @@ export class App {
 
   private promptText(prompt: PasswordPrompt): StyledText {
     const p = prompt.connection.target.kind === "ready" ? prompt.connection.target.params : null;
+    const inner = Math.max(12, Math.min(48, this.inspectBox.width - 8));
+    const typed = [...prompt.value].length;
+    const dots = "•".repeat(Math.min(typed, inner - 1));
+    const field = (text: string): TextChunk => bg(theme.surface)(fg(theme.text)(text));
     const lines: Line[] = [
       [bold(fg(theme.text)(`Password for ${prompt.connection.name}`))],
       [fg(theme.muted)(p ? `${p.user}@${p.host}:${p.port}/${p.database}` : "")],
       [],
-      [fg(theme.text)("•".repeat([...prompt.value].length)), bg(theme.text)(" ")],
+      [fg(theme.accent)(`╭${"─".repeat(inner + 2)}╮`)],
+      [fg(theme.accent)("│"), field(` ${dots}`), bg(theme.accent)(" "), field(" ".repeat(inner - dots.length)), fg(theme.accent)("│")],
+      [fg(theme.accent)(`╰${"─".repeat(inner + 2)}╯`)],
+      [fg(theme.muted)(typed === 0 ? "type the password" : `${typed} ${typed === 1 ? "character" : "characters"}`)],
       [],
     ];
     if (prompt.error) lines.push([fg(theme.error)(prompt.error)], []);

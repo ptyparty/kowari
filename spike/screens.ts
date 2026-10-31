@@ -51,6 +51,7 @@ const resolution: Resolution = {
     connection("local-ro", "local", "read-only", "repo"),
     connection("staging", "testing", "read-only", "user"),
     connection("prod-replica", "production", "none", "user"),
+    { ...connection("staging-rds", "testing", "read-only", "user"), target: { kind: "ready", params: { ...params, password: null } } },
   ],
   problems: [],
 };
@@ -132,6 +133,14 @@ try {
     s.mockInput.pressKey("'");
     await until(s, (f) => f.includes(" EXT "));
     await shoot(s, "tui-helix-select");
+  });
+
+  await session(4, async (s) => {
+    s.mockInput.pressEnter();
+    await until(s, (f) => f.includes("Password for staging-rds"));
+    await s.mockInput.typeText("hunter2!");
+    await until(s, (f) => f.includes("8 characters"));
+    await shoot(s, "tui-password");
   });
 
   await session(2, async (s) => {
