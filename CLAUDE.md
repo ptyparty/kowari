@@ -17,6 +17,7 @@ Default to using Bun instead of Node.js.
 - `src/format.ts`: text and JSON output for results.
 - `src/connections/keyring.ts`: passwords in the system keyring (`Bun.secrets`), with a D-Bus lock check so kowari never sets off an unlock prompt; `memoryKeyring` for tests.
 - `src/claude/deny.ts`: checks and adds the Claude Code deny rules that keep keyring tools away from Claude.
+- `src/claude/setup.ts`: `kowari setup`, which links the skill into Claude Code's config and adds the deny rules; `links.ts` is copied from qmux.
 - `src/connections/`: resolves the connection list for a worktree from your config, the repo's `.kowari.toml`, and the worktree's `.env`, including what Claude may do with each.
 - `skills/kowari/`: the agent skill.
 - `test/cli.test.ts`: runs the CLI end to end from a scratch git repo against a fixture database.

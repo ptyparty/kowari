@@ -12,13 +12,15 @@ const usage = `Usage:
   kowari tables <connection>          List tables and views
   kowari describe <connection> <table>
                                       Columns, constraints, indexes, and foreign keys pointing at a table
+  kowari setup [--yes|--remove]       List kowari's skill and keyring deny rules in Claude Code's config,
+                                      set up what is missing, or remove the skill
 
 Options:
   -C <dir>          Run as if started in <dir> (picks the worktree, its .env and .kowari.toml)
   --json            Print JSON instead of text
   --max-rows <n>    Stop after n rows (default ${defaultAgentLimits.maxRows})
 
-Every command below the first is for Claude: it obeys each connection's agent level.
+connections, query, tables and describe are for Claude: they obey each connection's agent level.
 A connection Claude has no access to is refused, read-only connections
 run through every read-only layer, and writes on approve-writes
 connections are refused until the kowari TUI can approve them.
@@ -65,6 +67,8 @@ async function main(argv: string[]): Promise<number> {
         return 0;
       }
       return (await import("./tui/main.ts")).runTui(options.cwd);
+    case "setup":
+      return (await import("./claude/setup.ts")).setupCommand(rest);
     case "help":
     case "--help":
     case "-h":

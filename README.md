@@ -13,8 +13,10 @@ A PostgreSQL client for the terminal that sits beside Claude Code. You write and
 ```bash
 bun install
 bun link                                       # puts `kowari` on PATH
-ln -s "$PWD/skills/kowari" ~/.claude/skills/   # teaches Claude to use it
+kowari setup --yes                             # teaches Claude to use it, and keeps it out of your keyring
 ```
+
+`kowari setup` lists what kowari adds to Claude Code's config and whether each part is there: the skill, linked so it follows this checkout as you update it, and the deny rules that keep keyring tools away from Claude. `--yes` sets up what is missing. `--remove` takes the skill out again but leaves the deny rules, which only protect you.
 
 ## Use
 
@@ -24,9 +26,10 @@ kowari connections                      list the connections, and what Claude ma
 kowari query <connection> [sql|-]       run one statement (from stdin when sql is - or missing)
 kowari tables <connection>              list tables and views
 kowari describe <connection> <table>    columns, constraints, indexes, and foreign keys pointing at a table
+kowari setup [--yes|--remove]           list, add, or remove kowari's skill and deny rules in Claude Code's config
 ```
 
-`-C <dir>` runs as if started in another worktree, `--json` prints JSON, and `--max-rows <n>` changes the 500-row cap. Every command after the first is for Claude and obeys the connection's agent level.
+`-C <dir>` runs as if started in another worktree, `--json` prints JSON, and `--max-rows <n>` changes the 500-row cap. `connections`, `query`, `tables` and `describe` are for Claude and obey the connection's agent level.
 
 Keys: `↑`/`↓` choose · Enter connect · `r` reload on the connection screen; then Ctrl-Enter or F5 run the statement under the cursor · Ctrl-Space complete · Tab switch pane · Ctrl-O connections · Ctrl-C cancel · Ctrl-Q quit. The editor uses helix keys.
 
