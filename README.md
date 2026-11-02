@@ -6,7 +6,7 @@ A PostgreSQL client for the terminal that sits beside Claude Code. You write and
 
 ![kowari completing a table name, opening a JSON cell, then a docked native Claude querying the same database](docs/kowari.gif)
 
-*kowari in a qmux tab with native Claude docked below. Tab completes the table name, the rows land in the grid, and Enter on a `jsonb` cell opens it as formatted JSON. Then Alt+c asks Claude why one partner's webhooks keep failing. Claude reads the same local database through `kowari query`, read-only, and answers. Waiting on the model is time-lapsed.*
+*kowari in a komux tab with native Claude docked below. Tab completes the table name, the rows land in the grid, and Enter on a `jsonb` cell opens it as formatted JSON. Then Alt+c asks Claude why one partner's webhooks keep failing. Claude reads the same local database through `kowari query`, read-only, and answers. Waiting on the model is time-lapsed.*
 
 ## Setup
 
@@ -82,6 +82,6 @@ Tests need Postgres from `scripts/test-db` (on 127.0.0.1:55433, or set `KOWARI_T
 
 ## The README recording
 
-`scripts/hero-cast` regenerates `docs/kowari.gif`. It runs a real Claude Code session, so each take costs model calls and comes out a little different. It starts a throwaway Postgres in Docker on 127.0.0.1:55435, seeds it from `scripts/hero-fixture/seed.sql`, builds a scratch worktree and config in `/tmp/demo-db`, and runs qmux and kowari from the ptyparty checkouts beside this one (`PTYPARTY_DIR` points elsewhere). It drives the session in a pty and draws each frame with Pillow. It needs Docker, `python3`, `fish` and a monospace TTF; pyte and Pillow install into a scratch venv on the first run.
+`scripts/hero-cast` regenerates `docs/kowari.gif`. It runs a real Claude Code session, so each take costs model calls and comes out a little different. It starts a throwaway Postgres in Docker on 127.0.0.1:55435, seeds it from `scripts/hero-fixture/seed.sql`, builds a scratch worktree and config in `/tmp/demo-db`, and runs komux and kowari from the ptyparty checkouts beside this one (`PTYPARTY_DIR` points elsewhere). It drives the session in a pty and draws each frame with Pillow. It needs Docker, `python3`, `fish` and a monospace TTF; pyte and Pillow install into a scratch venv on the first run.
 
 The logo is drawn by `docs/logo.py`: `python3 -I docs/logo.py tall-linedot-colour snug > docs/kowari.svg`.

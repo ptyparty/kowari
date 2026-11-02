@@ -31,14 +31,14 @@ agent = "read-only"
 local = "approve-writes"
 '''
 
-QMUX_CONFIG = '''export default {
+KOMUX_CONFIG = '''export default {
   defaultCwd: %(worktree)s,
-  untrackedCommands: ["claude", "remax", "hx", "qmux", "quoll", "kowari"],
+  untrackedCommands: ["claude", "remax", "hx", "komux", "quoll", "kowari"],
   tabs: { shop: { cwd: %(worktree)s, layout: "db" } },
   startup: ["shop"],
   layouts: {
     db: {
-      jobs: [{ name: "claude", command: ["qmux", "claude", "--mode", "auto"], dock: true }],
+      jobs: [{ name: "claude", command: ["komux", "claude", "--mode", "auto"], dock: true }],
       row: [{ command: ["kowari"], focus: true }],
     },
   },
@@ -63,7 +63,7 @@ def prepare(repo, port):
     os.makedirs(kowari_config)
     with open(os.path.join(kowari_config, 'connections.toml'), 'w') as handle:
         handle.write(USER_CONNECTIONS)
-    hs.write_qmux_config(env, QMUX_CONFIG, worktree=worktree)
+    hs.write_komux_config(env, KOMUX_CONFIG, worktree=worktree)
     hs.claude_config(sandbox, worktree, [os.path.join(repo, 'skills', 'kowari')], env, deny=hs.KEYRING_DENIES)
     return worktree, env
 
@@ -106,7 +106,7 @@ def main():
     out_base, port = sys.argv[1], sys.argv[2]
     repo = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..'))
     worktree, env = prepare(repo, port)
-    hs.record(['qmux', 'attach', SESSION], COLS, ROWS, worktree, env, SESSION, tour, out_base)
+    hs.record(['komux', 'attach', SESSION], COLS, ROWS, worktree, env, SESSION, tour, out_base)
 
 
 if __name__ == '__main__':
