@@ -19,7 +19,8 @@ Default to using Bun instead of Node.js.
 - `src/claude/deny.ts`: checks and adds the Claude Code deny rules that keep keyring tools away from Claude.
 - `src/claude/setup.ts`: `kowari setup`, which links the skill into Claude Code's config and adds the deny rules; `links.ts` is copied from komux.
 - `src/connections/`: resolves the connection list for a worktree from your config, the repo's `.kowari.toml`, and the worktree's `.env`, including what Claude may do with each.
-- `skills/kowari/`: the agent skill.
+- `guide/`: the agent's guide, one markdown page per topic, printed by `kowari guide <page>` (`src/guide.ts`, copied from quoll) and starting at `index.md`.
+- `skills/kowari/`: the agent skill, which only points at `kowari guide index`.
 - `test/cli.test.ts`: runs the CLI end to end from a scratch git repo against a fixture database.
 - `test/escape/`: the escape suite, its vectors, and the fixture that builds a database per test from a template.
 - `spike/`: the driver comparison and the per-layer escape matrix, kept to re-run when Bun, postgres.js or Postgres changes; `screens.ts` writes TUI screenshots (`bun spike/screens.ts <dir>`) by driving the app on the test renderer and drawing each frame with headless Chrome.

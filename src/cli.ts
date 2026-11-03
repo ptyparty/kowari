@@ -4,6 +4,7 @@ import { defaultAgentLimits, type AgentResult } from "./agent/read-only.ts";
 import { openAgentSession, type AgentSession } from "./agent/session.ts";
 import { describeTarget, resolveConnections, type Resolution } from "./connections/resolve.ts";
 import { formatRows, rowsAsJson } from "./format.ts";
+import { guideCommand } from "./guide.ts";
 
 const usage = `Usage:
   kowari                              Open the kowari TUI for this worktree (in a terminal; otherwise prints this)
@@ -12,6 +13,8 @@ const usage = `Usage:
   kowari tables <connection>          List tables and views
   kowari describe <connection> <table>
                                       Columns, constraints, indexes, and foreign keys pointing at a table
+  kowari guide [page]                 Print a page of the guide for agents querying through kowari;
+                                      index (the default) links to the rest
   kowari setup [--yes|--remove]       List kowari's skill and keyring deny rules in Claude Code's config,
                                       set up what is missing, or remove the skill
 
@@ -67,6 +70,8 @@ async function main(argv: string[]): Promise<number> {
         return 0;
       }
       return (await import("./tui/main.ts")).runTui(options.cwd);
+    case "guide":
+      return guideCommand("kowari", rest);
     case "setup":
       return (await import("./claude/setup.ts")).setupCommand(rest);
     case "help":

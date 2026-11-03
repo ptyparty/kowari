@@ -16,7 +16,7 @@ bun link                                       # puts `kowari` on PATH
 kowari setup --yes                             # teaches Claude to use it, and keeps it out of your keyring
 ```
 
-`kowari setup` lists what kowari adds to Claude Code's config and whether each part is there: the skill, linked so it follows this checkout as you update it, and the deny rules that keep keyring tools away from Claude. `--yes` sets up what is missing. `--remove` takes the skill out again but leaves the deny rules, which only protect you.
+`kowari setup` lists what kowari adds to Claude Code's config and whether each part is there: the skill, which points Claude at `kowari guide`, linked so it follows this checkout as you update it, and the deny rules that keep keyring tools away from Claude. `--yes` sets up what is missing. `--remove` takes the skill out again but leaves the deny rules, which only protect you.
 
 ## Use
 
@@ -26,6 +26,7 @@ kowari connections                      list the connections, and what Claude ma
 kowari query <connection> [sql|-]       run one statement (from stdin when sql is - or missing)
 kowari tables <connection>              list tables and views
 kowari describe <connection> <table>    columns, constraints, indexes, and foreign keys pointing at a table
+kowari guide [page]                     a page of the guide for agents; index links to the rest
 kowari setup [--yes|--remove]           list, add, or remove kowari's skill and deny rules in Claude Code's config
 ```
 
