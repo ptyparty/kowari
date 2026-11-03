@@ -86,7 +86,7 @@ describe("agent read-only connection", () => {
     const result = await conn.query("select id, v from victim order by id");
     expect(result).toEqual({
       kind: "rows",
-      columns: [{ name: "id", type: 23 }, { name: "v", type: 25 }],
+      columns: [{ name: "id", type: 23, table: expect.any(Number) }, { name: "v", type: 25, table: expect.any(Number) }],
       rows: [[1, "one"], [2, "two"], [3, "three"]],
       truncated: false,
       command: "SELECT",

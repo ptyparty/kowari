@@ -1,7 +1,7 @@
 import type { Query } from "../agent/catalog.ts";
 import type { AgentResult } from "../agent/read-only.ts";
 
-export type CatalogTable = { schema: string; name: string; kind: string };
+export type CatalogTable = { schema: string; name: string; kind: string; oid?: number };
 
 export type CatalogColumn = { schema: string; table: string; name: string; type: string };
 
@@ -25,7 +25,8 @@ export async function loadCatalog(query: Query): Promise<Catalog> {
   const tables = await rows(
     query(`
       select n.nspname, c.relname,
-        case c.relkind when 'v' then 'view' when 'm' then 'materialized view' when 'f' then 'foreign table' else 'table' end
+        case c.relkind when 'v' then 'view' when 'm' then 'materialized view' when 'f' then 'foreign table' else 'table' end,
+        c.oid::int8
       from pg_class c join pg_namespace n on n.oid = c.relnamespace
       where c.relkind in ('r', 'p', 'v', 'm', 'f') and ${userSchemas} and n.nspname <> 'pg_catalog' and not c.relispartition
       order by 1, 2
@@ -55,7 +56,7 @@ export async function loadCatalog(query: Query): Promise<Catalog> {
   return {
     searchPath: searchPath.map((r) => String(r[0])),
     schemas: schemas.map((r) => String(r[0])),
-    tables: tables.map((r) => ({ schema: String(r[0]), name: String(r[1]), kind: String(r[2]) })),
+    tables: tables.map((r) => ({ schema: String(r[0]), name: String(r[1]), kind: String(r[2]), oid: Number(r[3]) })),
     columns: columns.map((r) => ({ schema: String(r[0]), table: String(r[1]), name: String(r[2]), type: String(r[3]) })),
     functions: functions.map((r) => ({ schema: String(r[0]), name: String(r[1]), args: String(r[2] ?? ""), result: String(r[3] ?? "") })),
   };

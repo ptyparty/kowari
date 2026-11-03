@@ -23,6 +23,8 @@ import { complete, matchesPrefix, type Completion, type CompletionKind, type Com
 import { quoteIdent } from "../sql/ident.ts";
 import { statementAt, statementText } from "../sql/statements.ts";
 import { scan, type TokenKind } from "../sql/tokens.ts";
+import type { Attachment } from "../context.ts";
+import { kowariContext } from "./context.ts";
 import { Database, type Run } from "./database.ts";
 import { Helix, type Mode } from "./helix.ts";
 import { clamp, layoutGrid, moveCursor, type GridCursor, type Line, type Rows } from "./grid.ts";
@@ -92,6 +94,7 @@ export class App {
   private tables: Rows | null = null;
   private tableIndex = 0;
   private run: Run | null = null;
+  private runSql: string | null = null;
   private grid: GridCursor = { row: 0, col: 0, top: 0, left: 0 };
   private detail: Detail | null = null;
   private screen: Screen = "connections";
@@ -242,6 +245,28 @@ export class App {
     this.renderer.keyInput.off("paste", this.onPaste);
     await this.connected?.db.close();
     this.connected = null;
+  }
+
+  context(): Attachment | string {
+    if (this.screen !== "workspace" || !this.connected) return "kowari is not connected to a database";
+    const connection = this.connected.connection.name;
+    if (this.focus === "tables") {
+      const row = this.tables?.rows[this.tableIndex];
+      return row ? kowariContext({ kind: "table", connection, table: `${row[0]}.${row[1]}` }) : "No table selected in kowari";
+    }
+    if (this.focus === "results") {
+      const result = this.run?.result;
+      if (!this.runSql || result?.kind !== "rows") return "No results to point at in kowari";
+      const column = result.columns[this.grid.col];
+      if (!column || result.rows.length === 0) return kowariContext({ kind: "sql", connection, sql: this.runSql });
+      const table = column.table === undefined ? undefined : this.catalog.tables.find((candidate) => candidate.oid === column.table);
+      return kowariContext({ kind: "results", connection, sql: this.runSql, row: this.grid.row + 1, column: column.name, table: table ? `${table.schema}.${table.name}` : null });
+    }
+    const text = this.editor.plainText;
+    const { anchor, head } = this.helix.selection;
+    const span = statementAt(text, this.cursorIndex(text));
+    const sql = anchor !== head ? text.slice(Math.min(anchor, head), Math.max(anchor, head) + 1) : span ? statementText(text, span) : "";
+    return sql.trim() ? kowariContext({ kind: "sql", connection, sql }) : "No SQL to attach in kowari";
   }
 
   get text(): string {
@@ -752,6 +777,7 @@ export class App {
     const previous = this.connected;
     this.connected = { connection, db };
     this.run = null;
+    this.runSql = null;
     this.detail = null;
     this.tables = null;
     await previous?.db.close().catch(() => {});
@@ -810,14 +836,16 @@ export class App {
     this.say("running…", "info");
     const db = this.connected.db;
     this.userRunning = true;
+    const sql = statementText(text, span);
     let run: Run;
     try {
-      run = await db.run(statementText(text, span));
+      run = await db.run(sql);
     } finally {
       this.userRunning = false;
     }
     if (this.connected?.db !== db) return;
     this.run = run;
+    this.runSql = sql;
     if (run.result.kind === "rows" && /^(CREATE|ALTER|DROP|SET|RESET|COMMENT|GRANT|REVOKE|RENAME)/.test(run.result.command ?? "")) {
       void this.refreshTables(db).then(() => this.refreshCatalog(db));
     }

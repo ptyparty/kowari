@@ -18,7 +18,7 @@ export const defaultAgentLimits: AgentLimits = {
   maxBytes: 256 * 1024,
 };
 
-export type AgentColumn = { name: string; type: number };
+export type AgentColumn = { name: string; type: number; table?: number };
 
 export type AgentResult =
   | {
@@ -133,7 +133,7 @@ export async function collectRows(
 
   const take = (page: unknown[][]): boolean => {
     const pageColumns = (page as unknown as { columns?: AgentColumn[] }).columns;
-    if (pageColumns) columns = pageColumns.map((c) => ({ name: c.name, type: c.type }));
+    if (pageColumns) columns = pageColumns.map(column);
     for (const raw of page) {
       const row = values === "text" ? raw.map(asText) : raw;
       if (Number.isFinite(limits.maxBytes)) bytes += JSON.stringify(row).length;
@@ -155,7 +155,7 @@ export async function collectRows(
 
   if (columns.length === 0 && !truncated) {
     const described = await conn.unsafe(text, [], { simple: false }).describe();
-    columns = (described.columns ?? []).map((c) => ({ name: c.name, type: c.type }));
+    columns = (described.columns ?? []).map(column);
   }
 
   const executed = result as unknown as { command?: string | null; count?: number | null } | undefined;
@@ -167,4 +167,8 @@ export async function collectRows(
     command: truncated ? null : (executed?.command ?? null),
     count: truncated ? null : (executed?.count ?? null),
   };
+}
+
+function column(c: AgentColumn): AgentColumn {
+  return { name: c.name, type: c.type, ...(c.table ? { table: c.table } : {}) };
 }

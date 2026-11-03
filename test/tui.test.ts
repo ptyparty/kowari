@@ -199,6 +199,26 @@ describe("kowari TUI", () => {
     expect(frame).toMatch(/2\s+│ NULL/);
   });
 
+  test("hands komux the SQL, or where the result cursor is, but no values", async () => {
+    const s = await open([connection("local", "local")]);
+    expect(app!.context()).toBe("kowari is not connected to a database");
+    await connectFirst(s);
+    expect(app!.context()).toBe("No SQL to attach in kowari");
+    await s.mockInput.typeText("select 1 as one;\nselect id, status from shipment order by id");
+    expect(app!.context()).toMatchObject({ label: 'local · "select id, status from ship…"' });
+    s.mockInput.pressEnter({ ctrl: true });
+    await until(s, (f) => f.includes("2 rows"));
+    s.mockInput.pressEscape();
+    s.mockInput.pressTab();
+    s.mockInput.pressArrow("right");
+    s.mockInput.pressArrow("down");
+    await settled(s);
+    const context = app!.context();
+    expect(context).toMatchObject({ label: "local · row 2, status" });
+    expect(typeof context === "string" ? context : context.text).toStartWith('Results in kowari on connection local, row 2, column "status" of public.shipment, from:');
+    expect(JSON.stringify(context)).not.toContain("booked");
+  });
+
   test("Ctrl-Enter runs the statement the cursor is on, even after wide characters", async () => {
     const s = await open([connection("local", "local")]);
     await connectFirst(s);

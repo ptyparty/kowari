@@ -39,7 +39,7 @@ export function rowsAsJson(result: Rows): object {
   return {
     command: result.command,
     count: result.count,
-    columns: result.columns,
+    columns: result.columns.map(({ name, type }) => ({ name, type })),
     rows: result.rows.map((row) => row.map(jsonValue)),
     truncated: result.truncated,
   };

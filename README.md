@@ -34,6 +34,8 @@ kowari setup [--yes|--remove]           list, add, or remove kowari's skill and 
 
 Keys: `↑`/`↓` choose · Enter connect · `r` reload on the connection screen; then Ctrl-Enter or F5 run the statement under the cursor · Ctrl-Space complete · Tab switch pane · Ctrl-O connections · Ctrl-C cancel · Ctrl-Q quit. The editor uses helix keys.
 
+Inside komux, **Alt+shift+c** opens the message box for the tab's Claude with what you're on attached: the SQL selected in the editor or the statement under the cursor, the table picked in the list, or in the results the statement with the row number, column and table under the grid cursor. kowari never attaches a value from the results, on any connection; Claude reruns the statement with `kowari query` where its access on that connection allows.
+
 ## Connections
 
 Connections come from two files, shown together; a name in yours wins.
