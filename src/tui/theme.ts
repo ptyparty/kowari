@@ -1,26 +1,26 @@
 export const theme = {
-  background: "#15171d",
-  surface: "#1b1e26",
-  surface2: "#20242d",
-  raised: "#262a35",
-  line: "#2c313d",
-  text: "#d5d8e0",
-  muted: "#868c9c",
-  faint: "#4f5566",
-  selection: "#283350",
-  accent: "#66c7c2",
-  ok: "#9fd07e",
-  warning: "#f0a36a",
-  error: "#ef6b6b",
-  keyword: "#b99cf0",
-  function: "#8ea8ff",
-  type: "#66c7c2",
-  string: "#a9d48a",
-  number: "#f2a2c0",
-  operator: "#c9b27f",
-  comment: "#6b7285",
-  punctuation: "#9aa0b0",
-  parameter: "#f2a2c0",
+  background: "#0f1117",
+  surface: "#181b24",
+  surface2: "#1f2330",
+  raised: "#282e3d",
+  line: "#323949",
+  text: "#e8ebf2",
+  muted: "#9298ab",
+  faint: "#565e72",
+  selection: "#2c3a68",
+  accent: "#5ad8cf",
+  ok: "#a2e27a",
+  warning: "#ffa863",
+  error: "#ff6b6b",
+  keyword: "#c89dff",
+  function: "#8fb0ff",
+  type: "#5ad8cf",
+  string: "#b4e388",
+  number: "#ffa0c8",
+  operator: "#e0c27d",
+  comment: "#6e7790",
+  punctuation: "#a0a7ba",
+  parameter: "#ffa0c8",
 } as const;
 
 export const levelColor = {
@@ -31,13 +31,13 @@ export const levelColor = {
 } as const;
 
 export const environmentColor = {
-  local: "#9fd07e",
-  testing: "#e9b765",
-  production: "#ef6b6b",
+  local: "#a2e27a",
+  testing: "#ffc45e",
+  production: "#ff6b6b",
 } as const;
 
 export const environmentWash = {
-  local: "#1c2420",
-  testing: "#262218",
-  production: "#2b1a1d",
+  local: "#18261d",
+  testing: "#2a2416",
+  production: "#311a1f",
 } as const;
