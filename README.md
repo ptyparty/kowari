@@ -32,7 +32,14 @@ kowari setup [--yes|--remove]           list, add, or remove kowari's skill and 
 
 `-C <dir>` runs as if started in another worktree, `--json` prints JSON, and `--max-rows <n>` changes the 500-row cap. `connections`, `query`, `tables` and `describe` are for Claude and obey the connection's agent level.
 
-Keys: `↑`/`↓` choose · Enter connect · `r` reload on the connection screen; then Ctrl-Enter or F5 run the statement under the cursor · Ctrl-Space complete · Tab switch pane · Ctrl-O connections · Ctrl-C cancel · Ctrl-Q quit. The editor uses helix keys.
+Keys: Space opens a menu wherever it isn't text (the editor in normal mode, the tables, the results, the connection screen), and Space ? lists every key for where you are. Space f finds a table by name and selects its first 100 rows; Space c is the connection screen, also on Ctrl-O.
+
+- Connection screen: `↑`/`↓` choose · Enter connect · `r` reload.
+- Everywhere in the workspace: Ctrl-Enter or F5 run the statement under the cursor · Tab switch pane · Ctrl-C cancel · Ctrl-Q quit.
+- Editor: helix keys, with Ctrl-Space to complete in insert mode, `/` to search the SQL (`n`/`N` for the next and previous match), and `:` for a command line, where `:q` quits.
+- Results: `hjkl` or arrows move · Enter opens the cell · `/` searches the cells, highlighting the matches (`n`/`N` step through them, Esc clears) · `y` copies the cell and `Y` the row.
+
+Inside komux, kowari tells komux its keys for where you are, so komux's palette can list and run them.
 
 Inside komux, **Alt+shift+c** opens the message box for the tab's Claude with what you're on attached: the SQL selected in the editor or the statement under the cursor, the table picked in the list, or in the results the statement with the row number, column and table under the grid cursor. kowari never attaches a value from the results, on any connection; Claude reruns the statement with `kowari query` where its access on that connection allows.
 

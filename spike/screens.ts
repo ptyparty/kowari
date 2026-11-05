@@ -106,6 +106,7 @@ try {
     await until(s, (f) => /col\s+status/.test(f));
     await shoot(s, "tui-complete-where");
     s.mockInput.pressEscape();
+    s.mockInput.pressKey("a");
     for (let i = 0; i < tail.length; i++) s.mockInput.pressBackspace();
     const rest = " from shipment s\njoin carrier c on c.code = s.carrier";
     await s.mockInput.typeText(rest);
@@ -133,6 +134,38 @@ try {
     s.mockInput.pressKey("'");
     await until(s, (f) => f.includes(" EXT "));
     await shoot(s, "tui-helix-select");
+  });
+
+  await session(0, async (s) => {
+    s.mockInput.pressEnter();
+    await until(s, (f) => f.includes("LOCAL") && !f.includes("reading the catalog"));
+    s.mockInput.pressKey("i");
+    await s.mockInput.typeText("select id, status, carrier, created_at\nfrom shipment\norder by id;");
+    s.mockInput.pressEnter({ ctrl: true });
+    await until(s, (f) => f.includes("240 rows"));
+    s.mockInput.pressEscape();
+    s.mockInput.pressKey(" ");
+    await until(s, (f) => f.includes("find table"));
+    await shoot(s, "tui-menu");
+    s.mockInput.pressKey("?");
+    await until(s, (f) => f.includes("Keys"));
+    await shoot(s, "tui-help");
+    s.mockInput.pressEscape();
+    s.mockInput.pressKey(" ");
+    s.mockInput.pressKey("f");
+    await s.mockInput.typeText("car");
+    await until(s, (f) => f.includes("Find table"));
+    await shoot(s, "tui-find-table");
+    s.mockInput.pressEscape();
+    s.mockInput.pressTab();
+    await s.mockInput.typeText("/mae");
+    await until(s, (f) => f.includes("/mae"));
+    await shoot(s, "tui-grid-search");
+    s.mockInput.pressEnter();
+    s.mockInput.pressKey("n");
+    s.mockInput.pressKey("n");
+    await until(s, (f) => f.includes("3 of 60"));
+    await shoot(s, "tui-grid-search-next");
   });
 
   await session(4, async (s) => {

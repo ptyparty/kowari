@@ -25,11 +25,13 @@ import { complete, matchesPrefix, type Completion, type CompletionKind, type Com
 import { quoteIdent } from "../sql/ident.ts";
 import { statementAt, statementText } from "../sql/statements.ts";
 import { scan, type TokenKind } from "../sql/tokens.ts";
-import type { Attachment } from "../context.ts";
+import type { Attachment, KeyGroup } from "../context.ts";
 import { kowariContext } from "./context.ts";
 import { Database, type Run } from "./database.ts";
 import { Helix, type Mode } from "./helix.ts";
-import { clamp, layoutGrid, moveCursor, paint, type GridCursor, type Line, type Rows } from "./grid.ts";
+import { clamp, layoutGrid, moveCursor, paint, searchCells, type CellAt, type GridCursor, type Line, type Rows } from "./grid.ts";
+import { groupsFor, helpContexts, menuAction, menuEntries, menuGroups, type KeyContext, type MenuAction } from "./keys.ts";
+import { fuzzyFilter } from "./match.ts";
 import { environmentColor, environmentWash, levelColor, theme } from "./theme.ts";
 
 const selectionBg = RGBA.fromHex(theme.selection);
@@ -41,6 +43,7 @@ export type AppOptions = {
   keyring?: Keyring;
   claudeSettings?: string;
   setTitle?: (title: string) => void;
+  copy?: (text: string) => boolean;
   onQuit: () => void;
 };
 
@@ -62,7 +65,29 @@ type Popup = { result: CompletionResult; index: number };
 
 type Hint = [key: string, label: string];
 
+type TableRef = { schema: string; name: string };
+
+type Overlay =
+  | { kind: "menu"; from: KeyContext }
+  | { kind: "help"; from: KeyContext; top: number }
+  | { kind: "finder"; query: string; index: number }
+  | { kind: "command"; text: string }
+  | { kind: "search"; target: "grid" | "editor"; text: string; origin: GridCursor };
+
+const contextName: Partial<Record<KeyContext, string>> = {
+  connections: "connections",
+  normal: "SQL editor",
+  insert: "SQL editor",
+  completion: "SQL editor",
+  tables: "tables",
+  results: "results",
+  grid: "results",
+};
+
+const finderRows = 10;
+
 const connectionHints: Hint[] = [
+  ["␣", "menu"],
   ["↑↓", "choose"],
   ["⏎", "connect"],
   ["r", "reload"],
@@ -70,11 +95,18 @@ const connectionHints: Hint[] = [
 ];
 
 const workspaceHints: Hint[] = [
+  ["␣", "menu"],
   ["^⏎", "run"],
-  ["^␣", "complete"],
   ["Tab", "pane"],
   ["^o", "connections"],
-  ["^c", "cancel"],
+  ["^q", "quit"],
+];
+
+const insertHints: Hint[] = [
+  ["^⏎", "run"],
+  ["^␣", "complete"],
+  ["Esc", "normal"],
+  ["Tab", "pane"],
   ["^q", "quit"],
 ];
 
@@ -113,6 +145,8 @@ export class App {
   private readonly status: TextRenderable;
   private readonly popupBox: BoxRenderable;
   private readonly popupText: TextRenderable;
+  private readonly sheetBox: BoxRenderable;
+  private readonly sheetText: TextRenderable;
   private readonly styleIds: Partial<Record<TokenKind, number>> = {};
 
   private resolution: Resolution | null = null;
@@ -138,6 +172,8 @@ export class App {
   private confirmingDenies = false;
   private confirmingForget = false;
   private userRunning = false;
+  private overlay: Overlay | null = null;
+  private gridSearch = "";
   private title = "";
   private readonly helix: Helix;
 
@@ -172,6 +208,7 @@ export class App {
         this.renderBanner();
         this.renderConnections();
         this.renderStatus();
+        this.renderSheet();
       },
     });
     this.banner = new TextRenderable(renderer, { content: "", height: 1, wrapMode: "none", flexShrink: 0, bg: theme.surface });
@@ -254,11 +291,21 @@ export class App {
     this.popupText = new TextRenderable(renderer, { content: "", wrapMode: "none" });
     this.popupBox.add(this.popupText);
 
+    this.sheetBox = new BoxRenderable(renderer, {
+      position: "absolute",
+      zIndex: 20,
+      visible: false,
+      backgroundColor: theme.raised,
+    });
+    this.sheetText = new TextRenderable(renderer, { content: "", wrapMode: "none" });
+    this.sheetBox.add(this.sheetText);
+
     frame.add(this.banner);
     frame.add(this.connectionsScreen);
     frame.add(this.workspace);
     frame.add(this.status);
     frame.add(this.popupBox);
+    frame.add(this.sheetBox);
     renderer.root.add(frame);
   }
 
@@ -295,6 +342,24 @@ export class App {
     const span = statementAt(text, this.cursorIndex(text));
     const sql = anchor !== head ? text.slice(Math.min(anchor, head), Math.max(anchor, head) + 1) : span ? statementText(text, span) : "";
     return sql.trim() ? kowariContext({ kind: "sql", connection, sql }) : "No SQL to attach in kowari";
+  }
+
+  keys(): KeyGroup[] {
+    return this.overlay?.kind === "menu" ? menuGroups(this.overlay.from) : groupsFor([this.keyContext()]);
+  }
+
+  private keyContext(): KeyContext {
+    if (this.overlay) return this.overlay.kind;
+    if (this.screen === "connections") return this.prompt ? "password" : this.confirmingDenies || this.confirmingForget ? "confirm" : "connections";
+    if (this.focus === "editor") return this.popup ? "completion" : this.helix.mode === "insert" ? "insert" : "normal";
+    if (this.focus === "tables") return "tables";
+    if (this.detail) return "detail";
+    return this.gridRows ? "grid" : "results";
+  }
+
+  private get gridRows(): Rows | null {
+    const result = this.run?.result;
+    return result?.kind === "rows" && result.columns.length > 0 ? result : null;
   }
 
   get text(): string {
@@ -356,6 +421,20 @@ export class App {
       this.renderConnections();
       return;
     }
+    if (this.overlay) {
+      event.preventDefault();
+      const pasted = new TextDecoder().decode(event.bytes).split(/[\r\n]/)[0] ?? "";
+      if (this.overlay.kind === "finder") {
+        this.overlay.query += pasted;
+        this.overlay.index = 0;
+        this.renderSheet();
+      } else if (this.overlay.kind === "command" || this.overlay.kind === "search") {
+        this.overlay.text += pasted;
+        if (this.overlay.kind === "search" && this.overlay.target === "grid") this.liveGridSearch(this.overlay.text, this.overlay.origin);
+        this.renderStatus();
+      }
+      return;
+    }
     if (this.screen !== "workspace" || this.focus !== "editor" || this.helix.mode !== "normal") return;
     event.preventDefault();
     this.helix.pasteText(new TextDecoder().decode(event.bytes).replaceAll("\r\n", "\n").replaceAll("\r", "\n"));
@@ -373,7 +452,17 @@ export class App {
       if (this.connected?.db.cancel()) this.say("cancelling…", "info");
       return;
     }
+    if (this.overlay) {
+      key.preventDefault();
+      this.overlayKey(key, this.overlay);
+      return;
+    }
     if (this.screen === "connections") {
+      if (isSpace(key) && this.keyContext() === "connections") {
+        key.preventDefault();
+        this.openOverlay({ kind: "menu", from: "connections" });
+        return;
+      }
       this.connectionsKey(key);
       return;
     }
@@ -397,15 +486,216 @@ export class App {
       return;
     }
     if (this.focus === "editor") {
+      if (this.helix.mode === "normal" && !this.helix.pendingKey && this.editorKey(key)) {
+        key.preventDefault();
+        return;
+      }
       if (this.helix.handle(key)) {
         key.preventDefault();
         this.renderStatus();
       }
       return;
     }
+    if (isSpace(key) && !this.detail) {
+      key.preventDefault();
+      this.openOverlay({ kind: "menu", from: this.keyContext() });
+      return;
+    }
     if (this.focus === "tables") this.tablesKey(key);
     else if (this.focus === "results") this.resultsKey(key);
   };
+
+  private editorKey(key: KeyEvent): boolean {
+    if (key.ctrl || key.meta) return false;
+    if (isSpace(key)) this.openOverlay({ kind: "menu", from: "normal" });
+    else if (typed(key) === ":") this.openOverlay({ kind: "command", text: "" });
+    else if (typed(key) === "/") this.openOverlay({ kind: "search", target: "editor", text: "", origin: this.grid });
+    else return false;
+    return true;
+  }
+
+  private openOverlay(overlay: Overlay): void {
+    this.overlay = overlay;
+    this.closeCompletion();
+    this.renderSheet();
+    this.renderStatus();
+  }
+
+  private closeOverlay(): void {
+    this.overlay = null;
+    this.renderSheet();
+    this.renderStatus();
+  }
+
+  private overlayKey(key: KeyEvent, overlay: Overlay): void {
+    switch (overlay.kind) {
+      case "menu":
+        return this.menuKey(key, overlay.from);
+      case "help":
+        if (key.name === "escape" || key.name === "q" || isSpace(key) || typed(key) === "?") return this.closeOverlay();
+        overlay.top = Math.max(0, overlay.top + listStep(key));
+        return this.renderSheet();
+      case "finder":
+        return this.finderKey(key, overlay);
+      case "command":
+      case "search":
+        return this.promptLineKey(key, overlay);
+    }
+  }
+
+  private menuKey(key: KeyEvent, from: KeyContext): void {
+    this.closeOverlay();
+    const letter = typed(key);
+    const action = letter === null ? undefined : menuAction(from, letter);
+    if (action) this.menuDo(action, from);
+  }
+
+  private menuDo(action: MenuAction, from: KeyContext): void {
+    switch (action) {
+      case "find":
+        return this.openOverlay({ kind: "finder", query: "", index: 0 });
+      case "connections":
+        return this.showScreen("connections");
+      case "run":
+        return void this.runStatementUnderCursor();
+      case "detail":
+        if (this.gridRows) this.openDetail(this.gridRows);
+        return;
+      case "copyCell":
+        return this.copyCell(false);
+      case "copyRow":
+        return this.copyCell(true);
+      case "help":
+        return this.openOverlay({ kind: "help", from, top: 0 });
+      case "quit":
+        return this.options.onQuit();
+    }
+  }
+
+  private finderKey(key: KeyEvent, finder: Extract<Overlay, { kind: "finder" }>): void {
+    const found = this.foundTables(finder.query);
+    if (key.name === "escape") return this.closeOverlay();
+    if (key.name === "return") {
+      const table = found[finder.index];
+      this.closeOverlay();
+      if (table) this.selectFrom(table);
+      return;
+    }
+    if (key.name === "up" || (key.ctrl && key.name === "p")) finder.index = Math.max(0, finder.index - 1);
+    else if (key.name === "down" || (key.ctrl && key.name === "n")) finder.index = Math.min(Math.max(0, found.length - 1), finder.index + 1);
+    else if (key.name === "backspace") {
+      finder.query = [...finder.query].slice(0, -1).join("");
+      finder.index = 0;
+    } else {
+      const char = printable(key);
+      if (char === null) return;
+      finder.query += char;
+      finder.index = 0;
+    }
+    this.renderSheet();
+  }
+
+  private foundTables(query: string): TableRef[] {
+    const tables = (this.tables?.rows ?? []).map((row) => ({ schema: String(row[0]), name: String(row[1]) }));
+    return fuzzyFilter(query, tables, (t) => `${t.schema}.${t.name}`);
+  }
+
+  private promptLineKey(key: KeyEvent, line: Extract<Overlay, { kind: "command" | "search" }>): void {
+    if (key.name === "escape") {
+      if (line.kind === "search" && line.target === "grid") {
+        this.gridSearch = "";
+        this.grid = line.origin;
+        this.renderResults();
+      }
+      return this.closeOverlay();
+    }
+    if (key.name === "return") {
+      this.closeOverlay();
+      if (line.kind === "command") this.command(line.text.trim());
+      else if (line.target === "editor") this.searchEditor(line.text);
+      else this.keepGridSearch(line.text);
+      return;
+    }
+    if (key.name === "backspace") {
+      if (line.text === "") return this.closeOverlay();
+      line.text = [...line.text].slice(0, -1).join("");
+    } else {
+      const char = printable(key);
+      if (char === null) return;
+      line.text += char;
+    }
+    if (line.kind === "search" && line.target === "grid") this.liveGridSearch(line.text, line.origin);
+    this.renderStatus();
+  }
+
+  private command(text: string): void {
+    if (["q", "q!", "quit", "quit!", "qa", "qa!", "wq"].includes(text)) return this.options.onQuit();
+    if (text === "h" || text === "help") return this.openOverlay({ kind: "help", from: "normal", top: 0 });
+    if (text !== "") this.say(`not a command: :${text}  (:q quits, :help lists the keys)`, "error");
+  }
+
+  private searchEditor(query: string): void {
+    if (query === "") return;
+    if (!this.helix.search(query)) this.say(`no match for /${query}`, "error");
+    this.renderStatus();
+  }
+
+  private liveGridSearch(query: string, origin: GridCursor): void {
+    const rows = this.gridRows;
+    if (!rows) return;
+    this.gridSearch = query;
+    const cells = searchCells(rows, query);
+    const first = cells.find((c) => c.row > origin.row || (c.row === origin.row && c.col >= origin.col)) ?? cells[0];
+    this.grid = origin;
+    if (first) this.moveGridTo(rows, first);
+    this.renderResults();
+  }
+
+  private keepGridSearch(query: string): void {
+    const rows = this.gridRows;
+    if (!rows || query === "") {
+      this.gridSearch = "";
+      this.renderResults();
+      return;
+    }
+    const count = searchCells(rows, query).length;
+    if (count === 0) {
+      this.gridSearch = "";
+      this.say(`no cells match /${query}`, "error");
+    } else {
+      this.say(`${count} ${count === 1 ? "cell matches" : "cells match"} /${query}  ·  n next  N previous  Esc clears`, "info");
+    }
+    this.renderResults();
+  }
+
+  private nextGridMatch(rows: Rows, backward: boolean): void {
+    const cells = searchCells(rows, this.gridSearch);
+    if (cells.length === 0) return;
+    const at = cells.findIndex((c) => c.row === this.grid.row && c.col === this.grid.col);
+    const after = cells.findIndex((c) => c.row > this.grid.row || (c.row === this.grid.row && c.col > this.grid.col));
+    const next = backward
+      ? (at >= 0 ? at : after >= 0 ? after : cells.length) - 1
+      : after >= 0 ? after : 0;
+    const index = (next + cells.length) % cells.length;
+    this.moveGridTo(rows, cells[index]!);
+    this.message = { text: `/${this.gridSearch}  ·  ${index + 1} of ${cells.length}`, kind: "info" };
+    this.renderResults();
+    this.renderStatus();
+  }
+
+  private moveGridTo(rows: Rows, cell: CellAt): void {
+    this.grid = moveCursor(this.grid, rows, cell.row - this.grid.row, cell.col - this.grid.col, this.resultsHeight);
+  }
+
+  private copyCell(row: boolean): void {
+    const rows = this.gridRows;
+    const values = rows?.rows[this.grid.row];
+    if (!rows || !values) return;
+    const text = row ? values.map((v) => (v === null || v === undefined ? "" : detailText(v))).join("\t") : detailText(values[this.grid.col]);
+    const copy = this.options.copy ?? ((t: string) => this.renderer.copyToClipboardOSC52(t));
+    if (copy(text)) this.say(row ? `copied row ${this.grid.row + 1}` : `copied ${rows.columns[this.grid.col]?.name ?? "the cell"} from row ${this.grid.row + 1}`, "info");
+    else this.say("could not copy: the terminal does not take OSC 52 copies", "error");
+  }
 
   private completionKey(key: KeyEvent): boolean {
     if (key.ctrl && key.name === "space") {
@@ -671,21 +961,29 @@ export class App {
     } else if (key.name === "return") {
       key.preventDefault();
       const row = this.tables?.rows[this.tableIndex];
-      if (!row) return;
-      if (this.userRunning) {
-        this.say("a statement is still running (Ctrl-C cancels it)", "error");
-        return;
-      }
-      const select = `select * from ${quoteIdent(String(row[0]))}.${quoteIdent(String(row[1]))} limit 100;`;
-      const existing = this.editor.plainText.trimEnd();
-      this.helix.beforeExternalChange();
-      this.editor.editBuffer.setCursor(0, 0);
-      this.moveCursorToEnd();
-      this.editor.editBuffer.insertText(`${existing === "" ? "" : "\n\n"}${select}`);
-      this.highlight();
-      this.helix.reset();
-      void this.runStatementUnderCursor();
+      if (row) this.selectFrom({ schema: String(row[0]), name: String(row[1]) });
     }
+  }
+
+  private selectFrom(table: TableRef): void {
+    if (this.userRunning) {
+      this.say("a statement is still running (Ctrl-C cancels it)", "error");
+      return;
+    }
+    const index = this.tables?.rows.findIndex((row) => String(row[0]) === table.schema && String(row[1]) === table.name) ?? -1;
+    if (index >= 0) {
+      this.tableIndex = index;
+      this.renderTables();
+    }
+    const select = `select * from ${quoteIdent(table.schema)}.${quoteIdent(table.name)} limit 100;`;
+    const existing = this.editor.plainText.trimEnd();
+    this.helix.beforeExternalChange();
+    this.editor.editBuffer.setCursor(0, 0);
+    this.moveCursorToEnd();
+    this.editor.editBuffer.insertText(`${existing === "" ? "" : "\n\n"}${select}`);
+    this.highlight();
+    this.helix.reset();
+    void this.runStatementUnderCursor();
   }
 
   private resultsKey(key: KeyEvent): void {
@@ -725,6 +1023,23 @@ export class App {
     } else if (key.name === "return") {
       key.preventDefault();
       this.openDetail(rows);
+    } else if (rows.columns.length === 0 || key.ctrl || key.meta) {
+      return;
+    } else if (typed(key) === "/") {
+      key.preventDefault();
+      this.openOverlay({ kind: "search", target: "grid", text: "", origin: this.grid });
+    } else if ((typed(key) === "n" || typed(key) === "N") && this.gridSearch !== "") {
+      key.preventDefault();
+      this.nextGridMatch(rows, typed(key) === "N");
+    } else if (typed(key) === "y" || typed(key) === "Y") {
+      key.preventDefault();
+      this.copyCell(typed(key) === "Y");
+    } else if (key.name === "escape" && this.gridSearch !== "") {
+      key.preventDefault();
+      this.gridSearch = "";
+      this.message = null;
+      this.renderResults();
+      this.renderStatus();
     }
   }
 
@@ -809,6 +1124,8 @@ export class App {
     this.run = null;
     this.runSql = null;
     this.detail = null;
+    this.gridSearch = "";
+    this.overlay = null;
     this.tables = null;
     await previous?.db.close().catch(() => {});
     this.catalog = emptyCatalog;
@@ -882,6 +1199,7 @@ export class App {
     }
     this.grid = { row: 0, col: 0, top: 0, left: 0 };
     this.detail = null;
+    this.gridSearch = "";
     this.message = null;
     this.renderAll();
   }
@@ -1090,8 +1408,97 @@ export class App {
   }
 
   private card(stripe: string, lines: Line[]): Line[] {
-    const width = Math.min(Math.max(20, this.inspectBox.width - 2), Math.max(...lines.map(lineWidth)) + 4);
-    return [[], ...lines, []].map((line) => paint([fg(stripe)("▎ "), ...line], width, theme.raised));
+    return raised(stripe, lines, Math.min(Math.max(20, this.inspectBox.width - 2), Math.max(...lines.map(lineWidth)) + 4));
+  }
+
+  private renderSheet(): void {
+    const overlay = this.overlay;
+    if (!overlay || overlay.kind === "command" || overlay.kind === "search") {
+      this.sheetBox.visible = false;
+      return;
+    }
+    const lines = overlay.kind === "menu" ? this.menuLines(overlay.from) : overlay.kind === "help" ? this.helpLines(overlay) : this.finderLines(overlay);
+    const width = Math.min(this.renderer.width, Math.max(...lines.map(lineWidth)) + 4);
+    const card = raised(theme.accent, lines, width);
+    const room = Math.max(3, this.renderer.height - 2);
+    this.sheetText.content = styled(joinLines(card.slice(0, room)));
+    const height = Math.min(card.length, room);
+    this.sheetBox.width = width;
+    this.sheetBox.height = height;
+    if (overlay.kind === "menu") {
+      this.sheetBox.left = Math.max(0, this.renderer.width - width - 1);
+      this.sheetBox.top = Math.max(1, this.renderer.height - 1 - height);
+    } else {
+      this.sheetBox.left = Math.max(0, Math.floor((this.renderer.width - width) / 2));
+      this.sheetBox.top = overlay.kind === "finder" ? Math.min(3, Math.max(1, this.renderer.height - 1 - height)) : Math.max(1, Math.floor((this.renderer.height - height) / 2));
+    }
+    this.sheetBox.visible = true;
+  }
+
+  private menuLines(from: KeyContext): Line[] {
+    const entries = menuEntries(from);
+    const width = Math.max(...entries.map((b) => b.label.length));
+    return [
+      [bold(fg(theme.text)("Menu")), fg(theme.muted)(`  ${contextName[from] ?? ""}`)],
+      [],
+      ...entries.map((b): Line => [fg(theme.accent)(b.menu!.letter.padEnd(3)), fg(theme.text)(b.label.padEnd(width))]),
+      [],
+      [fg(theme.muted)("Esc closes")],
+    ];
+  }
+
+  private helpLines(help: Extract<Overlay, { kind: "help" }>): Line[] {
+    const groups = groupsFor(helpContexts(help.from));
+    const keyWidth = Math.max(...groups.flatMap((g) => g.commands.map((c) => Bun.stringWidth(c.keys))));
+    const labelWidth = Math.max(...groups.flatMap((g) => g.commands.map((c) => c.label.length)));
+    const columnWidth = keyWidth + 2 + labelWidth;
+    const blocks = groups.map((g): Line[] => [
+      [bold(fg(theme.accent)(g.name))],
+      ...g.commands.map((c): Line => [fg(theme.text)(c.keys + " ".repeat(keyWidth + 2 - Bun.stringWidth(c.keys))), fg(theme.muted)(c.label.padEnd(labelWidth))]),
+      [],
+    ]);
+    const total = blocks.reduce((sum, b) => sum + b.length, 0);
+    const columns = clamp(Math.floor((this.renderer.width - 6) / (columnWidth + 3)), 1, Math.ceil(total / Math.max(8, this.renderer.height - 8)));
+    const target = Math.ceil(total / columns);
+    const stacks: Line[][] = [[]];
+    for (const block of blocks) {
+      const current = stacks[stacks.length - 1]!;
+      if (current.length > 0 && current.length + block.length > target && stacks.length < columns) stacks.push([...block]);
+      else current.push(...block);
+    }
+    const rows = Math.max(...stacks.map((stack) => stack.length));
+    const body: Line[] = Array.from({ length: rows }, (_, r) =>
+      stacks.flatMap((stack, c): Line => {
+        const line = stack[r] ?? [];
+        return [...(c > 0 ? ["   "] : []), ...line, " ".repeat(Math.max(0, columnWidth - lineWidth(line)))];
+      }),
+    );
+    const room = Math.max(1, this.renderer.height - 8);
+    help.top = Math.min(help.top, Math.max(0, body.length - room));
+    const shown = body.slice(help.top, help.top + room);
+    const more = body.length > room ? `  ·  ↑↓ scroll (${help.top + 1}–${help.top + shown.length} of ${body.length})` : "";
+    return [[bold(fg(theme.text)("Keys")), fg(theme.muted)(`  ${contextName[help.from] ?? ""}`)], [], ...shown, [fg(theme.muted)(`Esc closes${more}`)]];
+  }
+
+  private finderLines(finder: Extract<Overlay, { kind: "finder" }>): Line[] {
+    const found = this.foundTables(finder.query);
+    const width = clamp(Math.max(28, ...found.map((t) => tableLabel(t).length + 4)), 28, Math.max(28, this.renderer.width - 8));
+    const top = clamp(finder.index - Math.floor(finderRows / 2), 0, Math.max(0, found.length - finderRows));
+    const rows = found.slice(top, top + finderRows).map((table, i): Line => {
+      const selected = top + i === finder.index;
+      const label = tableLabel(table);
+      const line: Line = [selected ? fg(theme.accent)("▸ ") : "  ", fg(theme.text)(label.length > width - 2 ? `${label.slice(0, width - 3)}…` : label)];
+      return selected ? paint(line, width, theme.selection) : paint(line, width, null);
+    });
+    return [
+      [bold(fg(theme.text)("Find table")), fg(theme.muted)(`  ${found.length} of ${this.tables?.rows.length ?? 0}`)],
+      [],
+      [bg(theme.background)(fg(theme.text)(` ${finder.query}`)), bg(theme.accent)(" "), bg(theme.background)(" ".repeat(Math.max(0, width - 2 - Bun.stringWidth(finder.query))))],
+      [],
+      ...(rows.length > 0 ? rows : [[fg(theme.muted)("no table matches")]]),
+      [],
+      [fg(theme.text)("⏎"), fg(theme.muted)(" select * … limit 100  "), fg(theme.text)("Esc"), fg(theme.muted)(" closes")],
+    ];
   }
 
   private renderTables(): void {
@@ -1151,7 +1558,7 @@ export class App {
       this.resultsText.content = styled([fg(theme.muted)(`  ${rows.command ? `${rows.command}${rows.count !== null ? ` ${rows.count}` : ""}` : "done"}`)]);
       return;
     }
-    const laid = layoutGrid(rows, this.grid, width, height);
+    const laid = layoutGrid(rows, this.grid, width, height, this.gridSearch);
     this.grid = laid.cursor;
     if (laid.first > 0 || laid.last < laid.total - 1) {
       label(fg(theme.text)(resultSummary(rows)), fg(theme.muted)(`columns ${laid.first + 1}–${laid.last + 1} of ${laid.total}`), fg(theme.muted)(formatMs(run.ms)));
@@ -1182,8 +1589,19 @@ export class App {
 
   private renderStatus(): void {
     const left: Line = [this.screen === "workspace" ? this.modeBadge() : pill(" CONNECT "), " "];
-    left.push(this.message ? fg(this.message.kind === "error" ? theme.error : theme.muted)(this.message.text) : fg(theme.muted)(this.statusContext()));
-    const hints = [...(this.screen === "connections" ? connectionHints : workspaceHints)];
+    const line = this.overlay?.kind === "command" || this.overlay?.kind === "search" ? this.overlay : null;
+    if (line) {
+      left.push(fg(theme.text)(`${line.kind === "command" ? ":" : "/"}${line.text}`), bg(theme.accent)(" "));
+      if (line.kind === "search" && line.target === "grid" && line.text !== "" && this.gridRows) {
+        const count = searchCells(this.gridRows, line.text).length;
+        left.push(fg(count === 0 ? theme.error : theme.muted)(`  ${count === 0 ? "no match" : `${count} ${count === 1 ? "cell" : "cells"}`}`));
+      }
+    } else {
+      left.push(this.message ? fg(this.message.kind === "error" ? theme.error : theme.muted)(this.message.text) : fg(theme.muted)(this.statusContext()));
+    }
+    const hints: Hint[] = line
+      ? [["⏎", line.kind === "command" ? "run" : "search"], ["Esc", "cancel"]]
+      : [...(this.screen === "connections" ? connectionHints : this.focus === "editor" && this.helix.mode === "insert" ? insertHints : workspaceHints)];
     let right = [...hintLine(hints), " "];
     while (hints.length > 0 && lineWidth(left) + lineWidth(right) + 2 > this.renderer.width) {
       hints.pop();
@@ -1191,6 +1609,32 @@ export class App {
     }
     this.status.content = styled(spread(left, right, this.renderer.width));
   }
+}
+
+function raised(stripe: string, lines: Line[], width: number): Line[] {
+  return [[], ...lines, []].map((line) => paint([fg(stripe)("▎ "), ...line], width, theme.raised));
+}
+
+function isSpace(key: KeyEvent): boolean {
+  return !key.ctrl && !key.meta && (key.name === "space" || key.sequence === " ");
+}
+
+function typed(key: KeyEvent): string | null {
+  if (key.ctrl || key.meta) return null;
+  const seq = key.sequence;
+  if (seq && seq.length === 1 && seq >= " ") return seq;
+  if (key.name.length === 1) return key.shift ? key.name.toUpperCase() : key.name;
+  return null;
+}
+
+function printable(key: KeyEvent): string | null {
+  if (key.ctrl || key.meta) return null;
+  if (isSpace(key)) return " ";
+  return key.sequence && [...key.sequence].length === 1 && key.sequence >= " " ? key.sequence : null;
+}
+
+function tableLabel(table: TableRef): string {
+  return table.schema === "public" ? table.name : `${table.schema}.${table.name}`;
 }
 
 function section(renderer: CliRenderer, size: Record<string, unknown>): [BoxRenderable, TextRenderable] {

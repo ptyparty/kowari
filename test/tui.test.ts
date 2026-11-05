@@ -18,6 +18,7 @@ let app: App | undefined;
 let quits = 0;
 let scratch: string;
 let keyring = memoryKeyring();
+let copies: string[] = [];
 
 beforeAll(async () => {
   await ready;
@@ -65,7 +66,8 @@ async function open(connections: ResolvedConnection[], claudeSettings = path.joi
     connections,
     problems: [],
   };
-  app = new App(setup.renderer, { resolve: async () => resolution, onQuit: () => (quits += 1), keyring, claudeSettings });
+  copies = [];
+  app = new App(setup.renderer, { resolve: async () => resolution, onQuit: () => (quits += 1), keyring, claudeSettings, copy: (text) => (copies.push(text), true) });
   await app.start();
   await until(setup, (f) => f.includes("CONNECTIONS"));
   return setup;
@@ -415,6 +417,160 @@ describe("kowari TUI", () => {
     s.mockInput.pressEnter();
     const frame = await until(s, (f) => f.includes("● PRODUCTION"));
     expect(frame).toContain("Claude read-only");
+  });
+
+  test("space opens the menu in normal mode, and ␣ ? lists the editor's keys", async () => {
+    const s = await open([connection("local", "local")]);
+    await connectFirst(s);
+    s.mockInput.pressEscape();
+    await until(s, (f) => f.includes(" NOR "));
+    s.mockInput.pressKey(" ");
+    let frame = await until(s, (f) => f.includes("Menu") && f.includes("find table"));
+    expect(frame).toContain("connections");
+    expect(app!.keys()[0]!.commands.map((c) => c.send)).toEqual(["f", "r", "c", "?", "q", "\u001b"]);
+    s.mockInput.pressKey("?");
+    frame = await until(s, (f) => f.includes("Keys") && f.includes("SQL editor"));
+    expect(frame).toContain("Workspace");
+    expect(frame).toContain("Select");
+    s.mockInput.pressArrow("down");
+    s.mockInput.pressKey("\u001b[6~");
+    frame = await until(s, (f) => f.includes("Completion"));
+    expect(frame).toContain("Insert");
+    s.mockInput.pressEscape();
+    await until(s, (f) => !f.includes("Completion"));
+    expect(app!.text).toBe("");
+  });
+
+  test("space in insert mode is text", async () => {
+    const s = await open([connection("local", "local")]);
+    await connectFirst(s);
+    await s.mockInput.typeText("select 1");
+    await until(s, () => app!.text === "select 1");
+    expect(s.captureCharFrame()).not.toContain("find table");
+  });
+
+  test("␣ f finds a table and selects from it", async () => {
+    const s = await open([connection("local", "local")]);
+    await connectFirst(s);
+    s.mockInput.pressEscape();
+    await until(s, (f) => f.includes(" NOR "));
+    s.mockInput.pressKey(" ");
+    s.mockInput.pressKey("f");
+    await until(s, (f) => f.includes("Find table"));
+    await s.mockInput.typeText("shpm");
+    await until(s, (f) => f.includes("1 of 2"));
+    s.mockInput.pressEnter();
+    const frame = await until(s, (f) => f.includes("2 rows"));
+    expect(frame).toContain("select * from public.shipment limit 100;");
+    expect(frame).not.toContain("Find table");
+  });
+
+  test(":q quits from normal mode, and an unknown command says so", async () => {
+    const s = await open([connection("local", "local")]);
+    s.mockInput.pressEnter();
+    await until(s, (f) => f.includes(" NOR "));
+    await s.mockInput.typeText(":nope");
+    await until(s, (f) => f.includes(":nope"));
+    s.mockInput.pressEnter();
+    await until(s, (f) => f.includes("not a command: :nope"));
+    const before = quits;
+    await s.mockInput.typeText(":q");
+    s.mockInput.pressEnter();
+    await s.waitFor(() => quits > before);
+    expect(app!.text).toBe("");
+  });
+
+  test("/ in normal mode selects the next match in the SQL, and n goes on", async () => {
+    const s = await open([connection("local", "local")]);
+    await connectFirst(s);
+    await s.mockInput.typeText("select id from shipment where id in (select id from shipment)");
+    await Bun.sleep(50);
+    s.mockInput.pressEscape();
+    s.mockInput.pressKey("g");
+    s.mockInput.pressKey("g");
+    await s.mockInput.typeText("/from");
+    await until(s, (f) => f.includes("/from"));
+    s.mockInput.pressEnter();
+    await settled(s);
+    expect(app!.context()).toMatchObject({ label: 'local · "from"' });
+    s.mockInput.pressKey("n");
+    await settled(s);
+    expect(app!.context()).toMatchObject({ label: 'local · "from"' });
+    s.mockInput.pressKey("d");
+    await until(s, () => app!.text === "select id from shipment where id in (select id  shipment)");
+  });
+
+  test("/ in the grid finds cells, n and N step through them, and Esc clears", async () => {
+    const s = await open([connection("local", "local")]);
+    await connectFirst(s);
+    await s.mockInput.typeText("select id, status, status as again from shipment order by id");
+    s.mockInput.pressEnter({ ctrl: true });
+    await until(s, (f) => f.includes("2 rows"));
+    s.mockInput.pressTab();
+    await s.mockInput.typeText("/BOOK");
+    await until(s, (f) => f.includes("no match"));
+    s.mockInput.pressBackspace();
+    s.mockInput.pressBackspace();
+    s.mockInput.pressBackspace();
+    s.mockInput.pressBackspace();
+    await s.mockInput.typeText("book");
+    let frame = await until(s, (f) => f.includes("/book") && f.includes("2 cells"));
+    s.mockInput.pressEnter();
+    frame = await until(s, (f) => f.includes("2 cells match /book"));
+    expect(app!.context()).toMatchObject({ label: "local · row 1, status" });
+    s.mockInput.pressKey("n");
+    frame = await until(s, (f) => f.includes("2 of 2"));
+    s.mockInput.pressKey("N", { shift: true });
+    frame = await until(s, (f) => f.includes("1 of 2"));
+    s.mockInput.pressEscape();
+    frame = await until(s, (f) => f.includes("row 1 · status") && !f.includes("of 2"));
+    expect(frame).toMatch(/1\s+booked\s+booked/);
+  });
+
+  test("y copies the cell and Y the row", async () => {
+    const s = await open([connection("local", "local")]);
+    await connectFirst(s);
+    await s.mockInput.typeText("select id, status from shipment order by id");
+    s.mockInput.pressEnter({ ctrl: true });
+    await until(s, (f) => f.includes("2 rows"));
+    s.mockInput.pressTab();
+    s.mockInput.pressArrow("right");
+    s.mockInput.pressKey("y");
+    await until(s, (f) => f.includes("copied status from row 1"));
+    s.mockInput.pressArrow("down");
+    s.mockInput.pressKey(" ");
+    s.mockInput.pressKey("Y", { shift: true });
+    await until(s, (f) => f.includes("copied row 2"));
+    expect(copies).toEqual(["booked", "2\t"]);
+  });
+
+  test("tells komux the keys for where it is", async () => {
+    const s = await open([connection("local", "local")]);
+    const names = () => app!.keys().map((g) => g.name);
+    expect(names()).toEqual(["Menu", "Workspace", "Connections"]);
+    await connectFirst(s);
+    expect(names()).toEqual(["Workspace", "Insert"]);
+    s.mockInput.pressEscape();
+    await until(s, (f) => f.includes(" NOR "));
+    expect(names()).toEqual(["Menu", "Workspace", "Move", "Select", "Edit"]);
+    const commands = app!.keys().flatMap((g) => g.commands);
+    expect(commands).toContainEqual({ label: "run statement under the cursor", keys: "F5  ^⏎", send: "\u001b[15~" });
+    expect(commands).toContainEqual({ label: "find table", keys: "␣ f", send: " f" });
+    expect(commands).toContainEqual({ label: "to or till a character", keys: "f t F T" });
+    s.mockInput.pressTab();
+    s.mockInput.pressTab();
+    await settled(s);
+    expect(names()).toEqual(["Menu", "Workspace", "Tables"]);
+  });
+
+  test("space on the connection screen opens its menu, and q there quits", async () => {
+    const s = await open([connection("local", "local")]);
+    s.mockInput.pressKey(" ");
+    await until(s, (f) => f.includes("Menu") && f.includes("help"));
+    expect(s.captureCharFrame()).not.toContain("find table");
+    const before = quits;
+    s.mockInput.pressKey("q");
+    await s.waitFor(() => quits > before);
   });
 
   test("Ctrl-Q quits", async () => {

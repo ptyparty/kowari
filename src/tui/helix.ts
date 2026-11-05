@@ -1,4 +1,5 @@
 import type { KeyEvent } from "@opentui/core";
+import { findIn, findLastIn } from "./match.ts";
 import {
   charStart,
   column,
@@ -49,6 +50,7 @@ export class Helix {
   private undoStack: Snapshot[] = [];
   private redoStack: Snapshot[] = [];
   private insertSnapshot: Snapshot | null = null;
+  private lastSearch = "";
 
   constructor(private readonly port: EditorPort) {}
 
@@ -91,6 +93,25 @@ export class Helix {
     const at = this.start;
     this.port.replace(at, at, pasted);
     this.select({ anchor: at, head: Math.max(at, prevChar(this.port.text(), at + pasted.length)) });
+  }
+
+  search(query: string, backward = false): boolean {
+    if (query === "") return false;
+    this.lastSearch = query;
+    const text = this.port.text();
+    const found = backward
+      ? (() => {
+          const before = findLastIn(text, query, this.start);
+          return before >= 0 ? before : findLastIn(text, query, text.length + 1);
+        })()
+      : (() => {
+          const after = findIn(text, query, this.start + 1);
+          return after >= 0 ? after : findIn(text, query);
+        })();
+    if (found < 0) return false;
+    this.extend = false;
+    this.select({ anchor: found, head: prevChar(text, found + query.length) });
+    return true;
   }
 
   handle(key: KeyEvent): boolean {
@@ -186,6 +207,12 @@ export class Helix {
         return this.openLine(text, true);
       case "O":
         return this.openLine(text, false);
+      case "n":
+        this.search(this.lastSearch);
+        return;
+      case "N":
+        this.search(this.lastSearch, true);
+        return;
       case "u":
         return this.travel(this.undoStack, this.redoStack);
       case "U":

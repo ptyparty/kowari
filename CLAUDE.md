@@ -16,6 +16,7 @@ Default to using Bun instead of Node.js.
 - `src/tui/`: the TUI (`kowari` with no arguments): connection screen, workspace, result grid, the human's database session.
 - `src/format.ts`: text and JSON output for results.
 - `src/context.ts`: the socket komux asks for context on Alt shift c, copied from quoll; `src/tui/context.ts` builds what the TUI attaches, which never includes a value from the results.
+- `src/tui/keys.ts`: every TUI key in one table, read by the Space menu, the help sheet, and the answer to komux's `{"keys":1}` question on the context socket; keep it in step when a key changes.
 - `src/connections/keyring.ts`: passwords in the system keyring (`Bun.secrets`), with a D-Bus lock check so kowari never sets off an unlock prompt; `memoryKeyring` for tests.
 - `src/claude/deny.ts`: checks and adds the Claude Code deny rules that keep keyring tools away from Claude and stop it reading or editing kowari's config files.
 - `src/claude/setup.ts`: `kowari setup`, which links the skill into Claude Code's config and adds the deny rules; `links.ts` is copied from komux.

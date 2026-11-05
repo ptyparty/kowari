@@ -3,6 +3,12 @@ import { join } from "node:path";
 
 export type Attachment = { label: string; text: string };
 
+export type KeyCommand = { label: string; keys: string; send?: string };
+
+export type KeyGroup = { name: string; commands: KeyCommand[] };
+
+export type AppKeys = { app: string; groups: KeyGroup[] };
+
 type Env = Record<string, string | undefined>;
 
 export class ContextRequest {
@@ -54,7 +60,7 @@ export function contextSocket(env: Env = process.env): string | undefined {
   return join(tabDir, "context", `${pane}.sock`);
 }
 
-export function listenForContext(onContext: (request: ContextRequest) => void, env: Env = process.env): () => void {
+export function listenForContext(onContext: (request: ContextRequest) => void, env: Env = process.env, keys?: () => AppKeys): () => void {
   const path = contextSocket(env);
   if (!path) return () => {};
   mkdirSync(join(path, ".."), { recursive: true, mode: 0o700 });
@@ -69,7 +75,9 @@ export function listenForContext(onContext: (request: ContextRequest) => void, e
         buffers.set(socket, lines.pop()!);
         for (const line of lines) {
           const message = parse(line);
-          if (message?.context !== undefined && !requests.has(socket)) {
+          if (message?.keys !== undefined && keys && !requests.has(socket)) {
+            socket.end(`${JSON.stringify({ keys: keys() })}\n`);
+          } else if (message?.context !== undefined && !requests.has(socket)) {
             const request = new ContextRequest((reply, last) => {
               const text = `${JSON.stringify(reply)}\n`;
               if (last) socket.end(text);

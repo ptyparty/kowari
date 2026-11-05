@@ -91,6 +91,30 @@ describe("the context socket", () => {
     expect(cancelled).toBe(1);
   });
 
+  test("answers komux's keys question with one line and closes", async () => {
+    const env = tabEnv();
+    let contexts = 0;
+    const groups = [{ name: "Results", commands: [{ label: "search cells", keys: "/", send: "/" }, { label: "move", keys: "hjkl" }] }];
+    cleanups.push(listenForContext(() => contexts++, env, () => ({ app: "kowari", groups })));
+    const client = komux(contextSocket(env)!);
+    await client.send({ keys: 1 });
+    await until(client.closed);
+    expect(client.lines).toEqual([{ keys: { app: "kowari", groups } }]);
+    expect(contexts).toBe(0);
+  });
+
+  test("still answers context questions when it lists keys", async () => {
+    const env = tabEnv();
+    let asked: ContextRequest | undefined;
+    cleanups.push(listenForContext((request) => (asked = request), env, () => ({ app: "kowari", groups: [] })));
+    const client = komux(contextSocket(env)!);
+    await client.send({ context: 1 });
+    await until(() => asked !== undefined);
+    asked!.none("nothing here");
+    await until(client.closed);
+    expect(client.lines).toEqual([{ none: "nothing here" }]);
+  });
+
   test("removes the socket when it stops", () => {
     const env = tabEnv();
     const stop = listenForContext(() => {}, env);

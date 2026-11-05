@@ -75,6 +75,19 @@ describe("helix normal mode", () => {
     expect(editor.selectedText).toBe(", ");
   });
 
+  test("search selects the next match, n and N go on and back, wrapping", () => {
+    const { editor, helix, press } = setup("select id from a join b on id = id", 3);
+    expect(helix.search("ID")).toBe(false);
+    expect(helix.search("id")).toBe(true);
+    expect([editor.selected, editor.selectedText]).toEqual([[7, 9], "id"]);
+    press("n");
+    expect(editor.selected).toEqual([27, 29]);
+    press("n", "n");
+    expect(editor.selected).toEqual([7, 9]);
+    press("N");
+    expect(editor.selected).toEqual([32, 34]);
+  });
+
   test("wc changes a word", () => {
     const { editor, helix, press } = setup("select id from t");
     press("w", "e", "c");

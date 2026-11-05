@@ -16,7 +16,7 @@ export async function runTui(cwd: string): Promise<number> {
     const context = app.context();
     if (typeof context === "string") request.none(context);
     else request.attach([context]);
-  });
+  }, process.env, () => ({ app: "kowari", groups: app.keys() }));
 
   try {
     await app.start();

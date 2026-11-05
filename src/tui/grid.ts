@@ -2,6 +2,7 @@ import type { TextChunk } from "@opentui/core";
 import { bg, bold, fg, underline } from "@opentui/core";
 import type { AgentResult } from "../agent/read-only.ts";
 import { displayValue } from "../format.ts";
+import { findIn } from "./match.ts";
 import { theme } from "./theme.ts";
 
 export type Rows = Extract<AgentResult, { kind: "rows" }>;
@@ -48,7 +49,19 @@ export type GridLayout = { lines: Line[]; cursor: GridCursor; first: number; las
 
 const edge = 7;
 
-export function layoutGrid(result: Rows, cursor: GridCursor, width: number, height: number): GridLayout {
+export type CellAt = { row: number; col: number };
+
+export function searchCells(result: Rows, query: string): CellAt[] {
+  const found: CellAt[] = [];
+  result.rows.forEach((row, r) => {
+    row.forEach((value, c) => {
+      if (findIn(flat(displayValue(value)), query) >= 0) found.push({ row: r, col: c });
+    });
+  });
+  return found;
+}
+
+export function layoutGrid(result: Rows, cursor: GridCursor, width: number, height: number, search = ""): GridLayout {
   const widths = columnWidths(result);
   const total = widths.length;
   const room = width - gutter;
@@ -84,9 +97,11 @@ export function layoutGrid(result: Rows, cursor: GridCursor, width: number, heig
     shown.forEach((col, i) => {
       if (i > 0) line.push(separator);
       const value = row[col];
-      const text = pad(flat(displayValue(value)), widths[col]!);
-      const chunk = value === null || value === undefined ? fg(theme.faint)(text) : fg(theme.text)(text);
-      line.push(selected && col === fixed.col ? bold(underline(chunk)) : chunk);
+      const full = flat(displayValue(value));
+      const text = pad(full, widths[col]!);
+      const color = value === null || value === undefined ? theme.faint : theme.text;
+      const chunks = highlighted(text, findIn(full, search) >= 0 ? search : "", color);
+      line.push(...(selected && col === fixed.col ? chunks.map((chunk) => bold(underline(chunk))) : chunks));
     });
     line.push(...rightMark("›"));
     lines.push(paint(line, lineWidth, selected ? theme.selection : r % 2 === 1 ? theme.surface : null));
@@ -94,11 +109,19 @@ export function layoutGrid(result: Rows, cursor: GridCursor, width: number, heig
   return { lines, cursor: fixed, first: left, last: lastShown, total };
 }
 
+function highlighted(text: string, search: string, color: string): TextChunk[] {
+  if (search === "") return [fg(color)(text)];
+  const at = findIn(text, search);
+  if (at < 0) return [fg(theme.warning)(text)];
+  const end = at + search.length;
+  return [fg(color)(text.slice(0, at)), bg(theme.warning)(fg(theme.background)(text.slice(at, end))), fg(color)(text.slice(end))];
+}
+
 export function paint(line: Line, width: number, color: string | null): Line {
   const length = line.reduce((sum, part) => sum + Bun.stringWidth(typeof part === "string" ? part : part.text), 0);
   const filled = length < width ? [...line, " ".repeat(width - length)] : line;
   if (color === null) return filled;
-  return filled.map((part) => bg(color)(part));
+  return filled.map((part) => (typeof part !== "string" && part.bg ? part : bg(color)(part)));
 }
 
 function visibleColumns(widths: number[], left: number, width: number): number[] {
