@@ -29,8 +29,8 @@ import type { Attachment, KeyGroup } from "../context.ts";
 import { kowariContext } from "./context.ts";
 import { Database, type Run } from "./database.ts";
 import { Helix, type Mode } from "./helix.ts";
-import { clamp, layoutGrid, moveCursor, paint, searchCells, type CellAt, type GridCursor, type Line, type Rows } from "./grid.ts";
-import { groupsFor, helpContexts, menuAction, menuEntries, menuGroups, type KeyContext, type MenuAction } from "./keys.ts";
+import { clamp, layoutGrid, lineWidth, moveCursor, paint, searchCells, type CellAt, type GridCursor, type Line, type Rows } from "./grid.ts";
+import { groupsFor, helpContexts, menuAction, opensMenu, menuEntries, menuGroups, type KeyContext, type MenuAction } from "./keys.ts";
 import { fuzzyFilter } from "./match.ts";
 import { environmentColor, environmentWash, levelColor, theme } from "./theme.ts";
 
@@ -66,6 +66,8 @@ type Popup = { result: CompletionResult; index: number };
 type Hint = [key: string, label: string];
 
 type TableRef = { schema: string; name: string };
+
+type Matches = { rows: Rows; query: string; cells: CellAt[]; at: Set<string> };
 
 type Overlay =
   | { kind: "menu"; from: KeyContext }
@@ -174,6 +176,7 @@ export class App {
   private userRunning = false;
   private overlay: Overlay | null = null;
   private gridSearch = "";
+  private matches: Matches | null = null;
   private title = "";
   private readonly helix: Helix;
 
@@ -496,7 +499,7 @@ export class App {
       }
       return;
     }
-    if (isSpace(key) && !this.detail) {
+    if (isSpace(key) && opensMenu(this.keyContext())) {
       key.preventDefault();
       this.openOverlay({ kind: "menu", from: this.keyContext() });
       return;
@@ -604,7 +607,7 @@ export class App {
     if (key.name === "escape") {
       if (line.kind === "search" && line.target === "grid") {
         this.gridSearch = "";
-        this.grid = line.origin;
+        this.restoreGrid(line.origin);
         this.renderResults();
       }
       return this.closeOverlay();
@@ -644,11 +647,24 @@ export class App {
     const rows = this.gridRows;
     if (!rows) return;
     this.gridSearch = query;
-    const cells = searchCells(rows, query);
+    const cells = this.searchMatches(rows, query).cells;
     const first = cells.find((c) => c.row > origin.row || (c.row === origin.row && c.col >= origin.col)) ?? cells[0];
-    this.grid = origin;
+    this.restoreGrid(origin);
     if (first) this.moveGridTo(rows, first);
     this.renderResults();
+  }
+
+  private restoreGrid(origin: GridCursor): void {
+    const rows = this.gridRows;
+    this.grid = rows ? moveCursor(origin, rows, 0, 0, this.resultsHeight) : { row: 0, col: 0, top: 0, left: 0 };
+  }
+
+  private searchMatches(rows: Rows, query: string): Matches {
+    const cached = this.matches;
+    if (cached && cached.rows === rows && cached.query === query) return cached;
+    const cells = searchCells(rows, query);
+    this.matches = { rows, query, cells, at: new Set(cells.map((c) => `${c.row}:${c.col}`)) };
+    return this.matches;
   }
 
   private keepGridSearch(query: string): void {
@@ -658,7 +674,7 @@ export class App {
       this.renderResults();
       return;
     }
-    const count = searchCells(rows, query).length;
+    const count = this.searchMatches(rows, query).cells.length;
     if (count === 0) {
       this.gridSearch = "";
       this.say(`no cells match /${query}`, "error");
@@ -669,7 +685,7 @@ export class App {
   }
 
   private nextGridMatch(rows: Rows, backward: boolean): void {
-    const cells = searchCells(rows, this.gridSearch);
+    const cells = this.searchMatches(rows, this.gridSearch).cells;
     if (cells.length === 0) return;
     const at = cells.findIndex((c) => c.row === this.grid.row && c.col === this.grid.col);
     const after = cells.findIndex((c) => c.row > this.grid.row || (c.row === this.grid.row && c.col > this.grid.col));
@@ -691,7 +707,7 @@ export class App {
     const rows = this.gridRows;
     const values = rows?.rows[this.grid.row];
     if (!rows || !values) return;
-    const text = row ? values.map((v) => (v === null || v === undefined ? "" : detailText(v))).join("\t") : detailText(values[this.grid.col]);
+    const text = row ? values.map(tsvField).join("\t") : isNull(values[this.grid.col]) ? "" : detailText(values[this.grid.col]);
     const copy = this.options.copy ?? ((t: string) => this.renderer.copyToClipboardOSC52(t));
     if (copy(text)) this.say(row ? `copied row ${this.grid.row + 1}` : `copied ${rows.columns[this.grid.col]?.name ?? "the cell"} from row ${this.grid.row + 1}`, "info");
     else this.say("could not copy: the terminal does not take OSC 52 copies", "error");
@@ -992,6 +1008,7 @@ export class App {
       if (key.name === "escape" || key.name === "q") this.detail = null;
       else this.detail.top = clamp(this.detail.top + listStep(key), 0, Math.max(0, this.detail.lines.length - 1));
       this.renderResults();
+      this.renderStatus();
       return;
     }
 
@@ -1013,7 +1030,7 @@ export class App {
       home: [-rows.rows.length, 0],
       end: [rows.rows.length, 0],
     };
-    const name = key.name === "g" ? (key.shift ? "end" : "home") : key.name;
+    const name = typed(key) === "g" ? "home" : typed(key) === "G" ? "end" : key.name;
     const move = moves[name];
     if (move) {
       key.preventDefault();
@@ -1188,12 +1205,17 @@ export class App {
     let run: Run;
     try {
       run = await db.run(sql);
+    } catch (e) {
+      if (this.connected?.db === db) this.say(`could not run the statement: ${e instanceof Error ? e.message : String(e)}`, "error");
+      return;
     } finally {
       this.userRunning = false;
+      this.renderEditorTitle();
     }
     if (this.connected?.db !== db) return;
     this.run = run;
     this.runSql = sql;
+    if (this.overlay?.kind === "search" && this.overlay.target === "grid") this.overlay = null;
     if (run.result.kind === "rows" && /^(CREATE|ALTER|DROP|SET|RESET|COMMENT|GRANT|REVOKE|RENAME)/.test(run.result.command ?? "")) {
       void this.refreshTables(db).then(() => this.refreshCatalog(db));
     }
@@ -1221,6 +1243,7 @@ export class App {
     const column = rows.columns[this.grid.col]?.name ?? "";
     this.detail = { title: `${column} · row ${this.grid.row + 1}`, lines: detailText(value).split("\n"), top: 0 };
     this.renderResults();
+    this.renderStatus();
   }
 
   private highlight(): void {
@@ -1253,6 +1276,7 @@ export class App {
     this.renderEditorTitle();
     this.renderResults();
     this.renderStatus();
+    this.renderSheet();
   }
 
   private renderBanner(): void {
@@ -1314,6 +1338,7 @@ export class App {
 
   private askPassword(connection: ResolvedConnection, error: string | null): void {
     this.prompt = { connection, value: "", error };
+    this.overlay = null;
     this.message = null;
     this.renderAll();
   }
@@ -1558,7 +1583,8 @@ export class App {
       this.resultsText.content = styled([fg(theme.muted)(`  ${rows.command ? `${rows.command}${rows.count !== null ? ` ${rows.count}` : ""}` : "done"}`)]);
       return;
     }
-    const laid = layoutGrid(rows, this.grid, width, height, this.gridSearch);
+    const matches = this.gridSearch === "" ? null : this.searchMatches(rows, this.gridSearch);
+    const laid = layoutGrid(rows, this.grid, width, height, matches ? { query: matches.query, at: (row, col) => matches.at.has(`${row}:${col}`) } : null);
     this.grid = laid.cursor;
     if (laid.first > 0 || laid.last < laid.total - 1) {
       label(fg(theme.text)(resultSummary(rows)), fg(theme.muted)(`columns ${laid.first + 1}–${laid.last + 1} of ${laid.total}`), fg(theme.muted)(formatMs(run.ms)));
@@ -1593,7 +1619,7 @@ export class App {
     if (line) {
       left.push(fg(theme.text)(`${line.kind === "command" ? ":" : "/"}${line.text}`), bg(theme.accent)(" "));
       if (line.kind === "search" && line.target === "grid" && line.text !== "" && this.gridRows) {
-        const count = searchCells(this.gridRows, line.text).length;
+        const count = this.searchMatches(this.gridRows, line.text).cells.length;
         left.push(fg(count === 0 ? theme.error : theme.muted)(`  ${count === 0 ? "no match" : `${count} ${count === 1 ? "cell" : "cells"}`}`));
       }
     } else {
@@ -1601,7 +1627,7 @@ export class App {
     }
     const hints: Hint[] = line
       ? [["⏎", line.kind === "command" ? "run" : "search"], ["Esc", "cancel"]]
-      : [...(this.screen === "connections" ? connectionHints : this.focus === "editor" && this.helix.mode === "insert" ? insertHints : workspaceHints)];
+      : (this.screen === "connections" ? connectionHints : this.focus === "editor" && this.helix.mode === "insert" ? insertHints : workspaceHints).filter(([k]) => k !== "␣" || opensMenu(this.keyContext()));
     let right = [...hintLine(hints), " "];
     while (hints.length > 0 && lineWidth(left) + lineWidth(right) + 2 > this.renderer.width) {
       hints.pop();
@@ -1613,6 +1639,15 @@ export class App {
 
 function raised(stripe: string, lines: Line[], width: number): Line[] {
   return [[], ...lines, []].map((line) => paint([fg(stripe)("▎ "), ...line], width, theme.raised));
+}
+
+function isNull(value: unknown): boolean {
+  return value === null || value === undefined;
+}
+
+function tsvField(value: unknown): string {
+  if (isNull(value)) return "";
+  return displayValue(value).replace(/[\\\t\n\r]/g, (c) => ({ "\\": "\\\\", "\t": "\\t", "\n": "\\n", "\r": "\\r" })[c]!);
 }
 
 function isSpace(key: KeyEvent): boolean {
@@ -1655,10 +1690,6 @@ function pill(text: string): TextChunk {
 
 function hintLine(hints: Hint[]): Line {
   return hints.flatMap(([key, label], i) => [...(i > 0 ? ["  "] : []), fg(theme.text)(key), fg(theme.muted)(` ${label}`)]);
-}
-
-function lineWidth(line: Line): number {
-  return line.reduce((sum, part) => sum + Bun.stringWidth(typeof part === "string" ? part : part.text), 0);
 }
 
 function spread(left: Line, right: Line, width: number): Line {

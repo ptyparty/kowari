@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
-import { createTestRenderer, type TestRendererSetup } from "@opentui/core/testing";
+import { createTestRenderer, KeyCodes, type TestRendererSetup } from "@opentui/core/testing";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -399,6 +399,7 @@ describe("kowari TUI", () => {
     s.mockInput.pressTab();
     s.mockInput.pressEnter();
     const frame = await until(s, (f) => f.includes("Esc closes"));
+    expect(frame).not.toContain("␣ menu");
     expect(frame).toContain('"carrier": "maersk"');
     expect(frame).toContain('"from": "NLRTM"');
   });
@@ -527,21 +528,78 @@ describe("kowari TUI", () => {
     expect(frame).toMatch(/1\s+booked\s+booked/);
   });
 
-  test("y copies the cell and Y the row", async () => {
+  test("y copies the cell and Y the row as one tab-separated line", async () => {
     const s = await open([connection("local", "local")]);
     await connectFirst(s);
-    await s.mockInput.typeText("select id, status from shipment order by id");
+    await s.mockInput.typeText("select id, status, details, E'a\\tb\\nc' as text from shipment order by id");
     s.mockInput.pressEnter({ ctrl: true });
     await until(s, (f) => f.includes("2 rows"));
     s.mockInput.pressTab();
     s.mockInput.pressArrow("right");
     s.mockInput.pressKey("y");
     await until(s, (f) => f.includes("copied status from row 1"));
-    s.mockInput.pressArrow("down");
     s.mockInput.pressKey(" ");
     s.mockInput.pressKey("Y", { shift: true });
+    await until(s, (f) => f.includes("copied row 1"));
+    s.mockInput.pressArrow("down");
+    s.mockInput.pressKey("y");
+    await until(s, (f) => f.includes("copied status from row 2"));
+    s.mockInput.pressKey("Y", { shift: true });
     await until(s, (f) => f.includes("copied row 2"));
-    expect(copies).toEqual(["booked", "2\t"]);
+    expect(copies).toEqual(["booked", '1\tbooked\t{"legs": [{"to": "USNYC", "from": "NLRTM"}], "carrier": "maersk"}\ta\\tb\\nc', "", "2\t\t\ta\\tb\\nc"]);
+  });
+
+  test("a menu opened while connecting closes when the workspace or a password prompt arrives", async () => {
+    const slow = (stored: string | null) => {
+      const base = memoryKeyring();
+      return { ...base, get: async () => (await Bun.sleep(300), stored) };
+    };
+    keyring = slow(new URL(adminUrl).password);
+    let s = await open([connection("staging", "testing", true, null)]);
+    s.mockInput.pressEnter();
+    s.mockInput.pressKey(" ");
+    await until(s, (f) => f.includes("Menu"));
+    let frame = await until(s, (f) => f.includes("● TESTING"));
+    expect(frame).not.toContain("Menu");
+    expect(app!.keys().some((g) => g.commands.some((c) => c.send === "?"))).toBe(false);
+    await app!.stop();
+    await setup!.dispose();
+
+    keyring = slow(null);
+    s = await open([connection("staging", "testing", true, null)]);
+    s.mockInput.pressEnter();
+    s.mockInput.pressKey(" ");
+    await until(s, (f) => f.includes("Menu"));
+    frame = await until(s, (f) => f.includes("Password for staging"));
+    expect(frame).not.toContain("Menu");
+    const before = quits;
+    s.mockInput.pressKey("q");
+    frame = await until(s, (f) => f.includes("1 character"));
+    expect(quits).toBe(before);
+    expect(frame).not.toContain("␣ menu");
+  });
+
+  test("Esc after a new result arrives mid-search keeps the cursor on the new rows", async () => {
+    await db.admin.unsafe(`create sequence if not exists flip`);
+    try {
+      const s = await open([connection("local", "local")]);
+      await connectFirst(s);
+      await s.mockInput.typeText("with n as (select nextval('flip') as v) select g from n, generate_series(1, case when v % 2 = 1 then 50 else 3 end) g, pg_sleep(case when v % 2 = 1 then 0 else 0.4 end)");
+      s.mockInput.pressEnter({ ctrl: true });
+      await until(s, (f) => f.includes("50 rows"));
+      s.mockInput.pressTab();
+      s.mockInput.pressKey("G", { shift: true });
+      await until(s, (f) => f.includes("row 50"));
+      s.mockInput.pressKey(KeyCodes.F5);
+      await s.mockInput.typeText("/9");
+      await until(s, (f) => f.includes("3 rows"));
+      s.mockInput.pressEscape();
+      const frame = await settled(s);
+      expect(frame).toMatch(/▎ 1\s/);
+      expect(app!.context()).toMatchObject({ label: "local · row 1, g" });
+    } finally {
+      await db.admin.unsafe(`drop sequence if exists flip`);
+    }
   });
 
   test("tells komux the keys for where it is", async () => {

@@ -61,7 +61,9 @@ export function searchCells(result: Rows, query: string): CellAt[] {
   return found;
 }
 
-export function layoutGrid(result: Rows, cursor: GridCursor, width: number, height: number, search = ""): GridLayout {
+export type GridSearch = { query: string; at: (row: number, col: number) => boolean };
+
+export function layoutGrid(result: Rows, cursor: GridCursor, width: number, height: number, search: GridSearch | null = null): GridLayout {
   const widths = columnWidths(result);
   const total = widths.length;
   const room = width - gutter;
@@ -97,10 +99,9 @@ export function layoutGrid(result: Rows, cursor: GridCursor, width: number, heig
     shown.forEach((col, i) => {
       if (i > 0) line.push(separator);
       const value = row[col];
-      const full = flat(displayValue(value));
-      const text = pad(full, widths[col]!);
+      const text = pad(flat(displayValue(value)), widths[col]!);
       const color = value === null || value === undefined ? theme.faint : theme.text;
-      const chunks = highlighted(text, findIn(full, search) >= 0 ? search : "", color);
+      const chunks = highlighted(text, search?.at(r, col) ? search.query : "", color);
       line.push(...(selected && col === fixed.col ? chunks.map((chunk) => bold(underline(chunk))) : chunks));
     });
     line.push(...rightMark("›"));
@@ -117,8 +118,12 @@ function highlighted(text: string, search: string, color: string): TextChunk[] {
   return [fg(color)(text.slice(0, at)), bg(theme.warning)(fg(theme.background)(text.slice(at, end))), fg(color)(text.slice(end))];
 }
 
+export function lineWidth(line: Line): number {
+  return line.reduce((sum, part) => sum + Bun.stringWidth(typeof part === "string" ? part : part.text), 0);
+}
+
 export function paint(line: Line, width: number, color: string | null): Line {
-  const length = line.reduce((sum, part) => sum + Bun.stringWidth(typeof part === "string" ? part : part.text), 0);
+  const length = lineWidth(line);
   const filled = length < width ? [...line, " ".repeat(width - length)] : line;
   if (color === null) return filled;
   return filled.map((part) => (typeof part !== "string" && part.bg ? part : bg(color)(part)));

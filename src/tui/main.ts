@@ -26,6 +26,7 @@ export async function runTui(cwd: string): Promise<number> {
     for (const signal of signals) process.off(signal, finish);
     stopContext();
     await app.stop().catch(() => {});
+    renderer.setTerminalTitle("");
     renderer.destroy();
   }
 }

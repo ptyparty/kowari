@@ -42,7 +42,7 @@ export const bindings: Binding[] = [
   { group: "Menu", label: "open the menu", keys: "␣", send: " ", when: menuFrom },
   menu("f", "find table", "find", panes),
   menu("r", "run statement", "run", panes),
-  menu("d", "row detail", "detail", ["grid"]),
+  menu("d", "open the cell", "detail", ["grid"]),
   menu("y", "copy cell", "copyCell", ["grid"]),
   menu("Y", "copy row", "copyRow", ["grid"]),
   menu("c", "connections", "connections", panes),
@@ -118,12 +118,16 @@ export const bindings: Binding[] = [
   { group: "Command line", label: "help", keys: ":help", send: "help\r", when: ["command"] },
   { group: "Command line", label: "run it", keys: "⏎", send: "\r", when: ["command"] },
   { group: "Command line", label: "close", keys: "Esc", send: esc, when: ["command"] },
-  { group: "Search", label: "find as you type", keys: "abc", when: ["search"] },
-  { group: "Search", label: "keep the matches", keys: "⏎", send: "\r", when: ["search"] },
+  { group: "Search", label: "type what to find", keys: "abc", when: ["search"] },
+  { group: "Search", label: "find it", keys: "⏎", send: "\r", when: ["search"] },
   { group: "Search", label: "cancel", keys: "Esc", send: esc, when: ["search"] },
   { group: "Help", label: "scroll", keys: "↑↓  jk", when: ["help"] },
   { group: "Help", label: "close", keys: "Esc  q", send: esc, when: ["help"] },
 ];
+
+export function opensMenu(context: KeyContext): boolean {
+  return menuFrom.includes(context);
+}
 
 export function menuEntries(from: KeyContext): Binding[] {
   return bindings.filter((b) => b.menu && b.when.includes(from));
