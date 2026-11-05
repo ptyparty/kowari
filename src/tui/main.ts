@@ -11,7 +11,7 @@ export async function runTui(cwd: string): Promise<number> {
   const signals = ["SIGTERM", "SIGHUP", "SIGINT"] as const;
   const finish = () => done.resolve();
   for (const signal of signals) process.on(signal, finish);
-  const app = new App(renderer, { resolve: () => resolveConnections({ cwd }), onQuit: finish });
+  const app = new App(renderer, { resolve: () => resolveConnections({ cwd }), setTitle: (title) => renderer.setTerminalTitle(title), onQuit: finish });
   const stopContext = listenForContext((request) => {
     const context = app.context();
     if (typeof context === "string") request.none(context);

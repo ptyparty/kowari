@@ -67,7 +67,7 @@ async function open(connections: ResolvedConnection[], claudeSettings = path.joi
   };
   app = new App(setup.renderer, { resolve: async () => resolution, onQuit: () => (quits += 1), keyring, claudeSettings });
   await app.start();
-  await until(setup, (f) => f.includes("Connections"));
+  await until(setup, (f) => f.includes("CONNECTIONS"));
   return setup;
 }
 
@@ -79,7 +79,7 @@ async function settled(s: TestRendererSetup): Promise<string> {
 
 async function connectFirst(s: TestRendererSetup): Promise<string> {
   s.mockInput.pressEnter();
-  await until(s, (f) => f.includes("LOCAL · local") && !f.includes("reading the catalog"));
+  await until(s, (f) => f.includes("● LOCAL") && !f.includes("reading the catalog"));
   s.mockInput.pressKey("i");
   return until(s, (f) => f.includes(" INS "));
 }
@@ -104,7 +104,7 @@ describe("kowari TUI", () => {
     await until(s, (f) => f.includes("that password was rejected"));
     await s.mockInput.typeText(new URL(adminUrl).password);
     s.mockInput.pressEnter();
-    await until(s, (f) => f.includes("TESTING · staging"));
+    await until(s, (f) => f.includes("● TESTING"));
     if (c.target.kind !== "ready") throw new Error("unreachable");
     expect(keyring.entries.get(keyringKey(c.target.params))).toBe(new URL(adminUrl).password);
   });
@@ -134,7 +134,7 @@ describe("kowari TUI", () => {
     await s.mockInput.pasteBracketedText(new URL(adminUrl).password);
     await until(s, (f) => f.includes("•".repeat(new URL(adminUrl).password.length)));
     s.mockInput.pressEnter();
-    await until(s, (f) => f.includes("TESTING · staging"));
+    await until(s, (f) => f.includes("● TESTING"));
   });
 
   test("with the keyring locked, it still asks, says the password will not be stored, and does not store it", async () => {
@@ -145,7 +145,7 @@ describe("kowari TUI", () => {
     await until(s, (f) => f.includes("the keyring is locked or not running, so this password will"));
     await s.mockInput.typeText(new URL(adminUrl).password);
     s.mockInput.pressEnter();
-    const frame = await until(s, (f) => f.includes("TESTING · staging"));
+    const frame = await until(s, (f) => f.includes("● TESTING"));
     expect(frame).toContain("the password was not stored");
     expect(keyring.entries.size).toBe(0);
   });
@@ -167,8 +167,8 @@ describe("kowari TUI", () => {
 
   test("starts on the connection screen and inspects the selected connection", async () => {
     const s = await open([connection("local", "local"), connection("staging", "testing", false)]);
-    let frame = await until(s, (f) => f.includes("Details"));
-    expect(frame).toMatch(/Name\s+Environment\s+Claude/);
+    let frame = await until(s, (f) => f.includes("DETAILS"));
+    expect(frame).toMatch(/name\s+environment\s+claude/);
     expect(frame).toContain("sslmode      prefer");
     expect(frame).toMatch(/▸\s+local\s+local\s+read-only/);
     expect(frame).toContain("password     set");
@@ -180,7 +180,7 @@ describe("kowari TUI", () => {
 
   test("the connection list keeps its environment and Claude columns in a narrow terminal", async () => {
     const s = await open([connection("a-rather-long-connection-name-for-staging", "testing"), connection("local", "local")]);
-    await until(s, (f) => f.includes("Details"));
+    await until(s, (f) => f.includes("DETAILS"));
     s.resize(80, 24);
     const frame = await until(s, (f) => /▸\s+a-rather.*…\s+testing\s+read-only/.test(f));
     expect(frame).toMatch(/local\s+local\s+read-only/);
@@ -194,9 +194,9 @@ describe("kowari TUI", () => {
     await s.mockInput.typeText("select 1 as one;\nselect id, status from shipment order by id");
     s.mockInput.pressEnter({ ctrl: true });
     frame = await until(s, (f) => f.includes("2 rows"));
-    expect(frame).toMatch(/id\s+│ status/);
-    expect(frame).toMatch(/1\s+│ booked/);
-    expect(frame).toMatch(/2\s+│ NULL/);
+    expect(frame).toMatch(/id\s+status/);
+    expect(frame).toMatch(/1\s+booked/);
+    expect(frame).toMatch(/2\s+NULL/);
   });
 
   test("hands komux the SQL, or where the result cursor is, but no values", async () => {
@@ -291,7 +291,7 @@ describe("kowari TUI", () => {
     await s.mockInput.typeText("select * from sh");
     await until(s, (f) => /tbl\s+shipment/.test(f));
     s.mockInput.pressKey("o", { ctrl: true });
-    const frame = await until(s, (f) => f.includes("Details"));
+    const frame = await until(s, (f) => f.includes("DETAILS"));
     expect(frame).not.toMatch(/tbl\s+shipment/);
   });
 
@@ -406,15 +406,15 @@ describe("kowari TUI", () => {
     await connectFirst(s);
     await s.mockInput.typeText("select nope from shipment");
     s.mockInput.pressEnter({ ctrl: true });
-    const frame = await until(s, (f) => f.includes("Error ·"));
+    const frame = await until(s, (f) => f.includes("RESULTS  ·  error"));
     expect(frame).toContain('column "nope" does not exist');
   });
 
   test("a production connection says so in the banner", async () => {
     const s = await open([connection("prod", "production")]);
     s.mockInput.pressEnter();
-    const frame = await until(s, (f) => f.includes("PRODUCTION · prod"));
-    expect(frame).toContain("Claude: read-only");
+    const frame = await until(s, (f) => f.includes("● PRODUCTION"));
+    expect(frame).toContain("Claude read-only");
   });
 
   test("Ctrl-Q quits", async () => {

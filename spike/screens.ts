@@ -67,7 +67,7 @@ async function session(pick: number, run: (s: TestRendererSetup) => Promise<void
   const s = await createTestRenderer({ width: 120, height: 32, kittyKeyboard: true });
   const app = new App(s.renderer, { resolve: async () => resolution, onQuit: () => {}, keyring: memoryKeyring(), claudeSettings: "/nonexistent/kowari-screens/settings.json" });
   await app.start();
-  await until(s, (f) => f.includes("Details"));
+  await until(s, (f) => f.includes("DETAILS"));
   for (let i = 0; i < pick; i++) s.mockInput.pressArrow("down");
   await run(s);
   await app.stop();
@@ -159,7 +159,7 @@ try {
     s.mockInput.pressKey("i");
     await s.mockInput.typeText("select nope from shipment");
     s.mockInput.pressEnter({ ctrl: true });
-    await until(s, (f) => f.includes("Error"));
+    await until(s, (f) => f.includes("RESULTS  ·  error"));
     await shoot(s, "tui-production-error");
   });
 } finally {

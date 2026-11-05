@@ -1,5 +1,5 @@
 import type { TextChunk } from "@opentui/core";
-import { bg, bold, fg } from "@opentui/core";
+import { bg, bold, fg, underline } from "@opentui/core";
 import type { AgentResult } from "../agent/read-only.ts";
 import { displayValue } from "../format.ts";
 import { theme } from "./theme.ts";
@@ -11,7 +11,8 @@ export type GridCursor = { row: number; col: number; top: number; left: number }
 export type Line = (string | TextChunk)[];
 
 const maxColumnWidth = 40;
-const separator = " │ ";
+const separator = "  ";
+const gutter = 2;
 
 const widthCache = new WeakMap<Rows, number[]>();
 
@@ -37,7 +38,7 @@ export function moveCursor(cursor: GridCursor, result: Rows, dRow: number, dCol:
   const colCount = result.columns.length;
   const row = clamp(cursor.row + dRow, 0, Math.max(0, rowCount - 1));
   const col = clamp(cursor.col + dCol, 0, Math.max(0, colCount - 1));
-  const bodyHeight = Math.max(1, height - 2);
+  const bodyHeight = Math.max(1, height - 1);
   const top = row < cursor.top ? row : row >= cursor.top + bodyHeight ? row - bodyHeight + 1 : cursor.top;
   const left = col < cursor.left ? col : cursor.left;
   return { row, col, top, left };
@@ -50,49 +51,54 @@ const edge = 7;
 export function layoutGrid(result: Rows, cursor: GridCursor, width: number, height: number): GridLayout {
   const widths = columnWidths(result);
   const total = widths.length;
+  const room = width - gutter;
   let left = cursor.left;
-  while (left < cursor.col && !fits(widths, left, cursor.col, width - 2 * edge)) left += 1;
+  while (left < cursor.col && !fits(widths, left, cursor.col, room - 2 * edge)) left += 1;
   const leftEdge = left > 0 ? edge : 0;
-  let shown = visibleColumns(widths, left, width - leftEdge);
+  let shown = visibleColumns(widths, left, room - leftEdge);
   const moreRight = shown[shown.length - 1]! < total - 1;
-  if (moreRight) shown = visibleColumns(widths, left, width - leftEdge - edge);
+  if (moreRight) shown = visibleColumns(widths, left, room - leftEdge - edge);
   const lastShown = shown[shown.length - 1]!;
   const hiddenLeft = left;
   const hiddenRight = total - 1 - lastShown;
   const fixed = { ...cursor, left };
+  const used = leftEdge + shown.reduce((sum, col, i) => sum + widths[col]! + (i > 0 ? separator.length : 0), 0) + (hiddenRight > 0 ? edge : 0);
+  const lineWidth = Math.min(width, gutter + used + 2);
 
-  const leftMark = (label: string): (string | TextChunk)[] => (hiddenLeft > 0 ? [fg(theme.warning)(label.padEnd(edge))] : []);
-  const rightMark = (label: string): (string | TextChunk)[] => (hiddenRight > 0 ? [fg(theme.warning)(label.padStart(edge))] : []);
+  const leftMark = (label: string): Line => (hiddenLeft > 0 ? [fg(theme.warning)(label.padEnd(edge))] : []);
+  const rightMark = (label: string): Line => (hiddenRight > 0 ? [fg(theme.warning)(label.padStart(edge))] : []);
 
-  const header: Line = [...leftMark(`‹ +${hiddenLeft}`)];
-  const rule: Line = [...leftMark("‹")];
+  const header: Line = ["  ", ...leftMark(`‹ +${hiddenLeft}`)];
   shown.forEach((col, i) => {
-    if (i > 0) {
-      header.push(fg(theme.border)(separator));
-      rule.push(fg(theme.border)("─┼─"));
-    }
-    header.push(bold(fg(theme.accent)(pad(result.columns[col]!.name, widths[col]!))));
-    rule.push(fg(theme.border)("─".repeat(widths[col]!)));
+    if (i > 0) header.push(separator);
+    header.push(bold(fg(theme.muted)(pad(result.columns[col]!.name, widths[col]!))));
   });
   header.push(...rightMark(`+${hiddenRight} ›`));
-  rule.push(...rightMark("›"));
 
-  const lines: Line[] = [header, rule];
-  const bodyHeight = Math.max(0, height - 2);
+  const lines: Line[] = [paint(header, lineWidth, theme.surface)];
+  const bodyHeight = Math.max(0, height - 1);
   for (let r = fixed.top; r < Math.min(result.rows.length, fixed.top + bodyHeight); r++) {
     const row = result.rows[r]!;
-    const line: Line = [...leftMark("‹")];
+    const selected = r === fixed.row;
+    const line: Line = [selected ? fg(theme.accent)("▎ ") : "  ", ...leftMark("‹")];
     shown.forEach((col, i) => {
-      if (i > 0) line.push(fg(theme.border)(separator));
+      if (i > 0) line.push(separator);
       const value = row[col];
       const text = pad(flat(displayValue(value)), widths[col]!);
-      const chunk = value === null || value === undefined ? fg(theme.muted)(text) : fg(theme.text)(text);
-      line.push(r === fixed.row && col === fixed.col ? bg(theme.selection)(chunk) : chunk);
+      const chunk = value === null || value === undefined ? fg(theme.faint)(text) : fg(theme.text)(text);
+      line.push(selected && col === fixed.col ? bold(underline(chunk)) : chunk);
     });
     line.push(...rightMark("›"));
-    lines.push(line);
+    lines.push(paint(line, lineWidth, selected ? theme.selection : r % 2 === 1 ? theme.surface : null));
   }
   return { lines, cursor: fixed, first: left, last: lastShown, total };
+}
+
+export function paint(line: Line, width: number, color: string | null): Line {
+  const length = line.reduce((sum, part) => sum + Bun.stringWidth(typeof part === "string" ? part : part.text), 0);
+  const filled = length < width ? [...line, " ".repeat(width - length)] : line;
+  if (color === null) return filled;
+  return filled.map((part) => bg(color)(part));
 }
 
 function visibleColumns(widths: number[], left: number, width: number): number[] {

@@ -3,6 +3,7 @@ import {
   bold,
   BoxRenderable,
   fg,
+  LineNumberRenderable,
   RGBA,
   StyledText,
   SyntaxStyle,
@@ -13,6 +14,7 @@ import {
   type PasteEvent,
   type TextChunk,
 } from "@opentui/core";
+import path from "node:path";
 import { listTables } from "../agent/catalog.ts";
 import { addDenies, checkDenies, claudeSettingsPath, keyringDenyRules, type DenyCheck } from "../claude/deny.ts";
 import { keyringKey, systemKeyring, type Keyring } from "../connections/keyring.ts";
@@ -27,8 +29,8 @@ import type { Attachment } from "../context.ts";
 import { kowariContext } from "./context.ts";
 import { Database, type Run } from "./database.ts";
 import { Helix, type Mode } from "./helix.ts";
-import { clamp, layoutGrid, moveCursor, type GridCursor, type Line, type Rows } from "./grid.ts";
-import { environmentColor, levelColor, theme } from "./theme.ts";
+import { clamp, layoutGrid, moveCursor, paint, type GridCursor, type Line, type Rows } from "./grid.ts";
+import { environmentColor, environmentWash, levelColor, theme } from "./theme.ts";
 
 const selectionBg = RGBA.fromHex(theme.selection);
 const selectionFg = RGBA.fromHex(theme.text);
@@ -38,6 +40,7 @@ export type AppOptions = {
   open?: (params: ConnectionParams) => Promise<Database>;
   keyring?: Keyring;
   claudeSettings?: string;
+  setTitle?: (title: string) => void;
   onQuit: () => void;
 };
 
@@ -57,6 +60,26 @@ type Message = { text: string; kind: "info" | "error" };
 
 type Popup = { result: CompletionResult; index: number };
 
+type Hint = [key: string, label: string];
+
+const connectionHints: Hint[] = [
+  ["↑↓", "choose"],
+  ["⏎", "connect"],
+  ["r", "reload"],
+  ["^q", "quit"],
+];
+
+const workspaceHints: Hint[] = [
+  ["^⏎", "run"],
+  ["^␣", "complete"],
+  ["Tab", "pane"],
+  ["^o", "connections"],
+  ["^c", "cancel"],
+  ["^q", "quit"],
+];
+
+const paneLabel: Record<Pane, string> = { tables: "tables", editor: "sql", results: "results" };
+
 const popupRows = 8;
 
 const kindLabel: Record<CompletionKind, string> = {
@@ -73,15 +96,19 @@ export class App {
   private readonly banner: TextRenderable;
   private readonly connectionsScreen: BoxRenderable;
   private readonly listBox: BoxRenderable;
+  private readonly listLabel: TextRenderable;
   private readonly listText: TextRenderable;
   private readonly inspectBox: BoxRenderable;
+  private readonly inspectLabel: TextRenderable;
   private readonly inspectText: TextRenderable;
   private readonly workspace: BoxRenderable;
   private readonly tablesBox: BoxRenderable;
+  private readonly tablesLabel: TextRenderable;
   private readonly tablesText: TextRenderable;
-  private readonly editorBox: BoxRenderable;
+  private readonly editorLabel: TextRenderable;
   private readonly editor: TextareaRenderable;
   private readonly resultsBox: BoxRenderable;
+  private readonly resultsLabel: TextRenderable;
   private readonly resultsText: TextRenderable;
   private readonly status: TextRenderable;
   private readonly popupBox: BoxRenderable;
@@ -111,6 +138,7 @@ export class App {
   private confirmingDenies = false;
   private confirmingForget = false;
   private userRunning = false;
+  private title = "";
   private readonly helix: Helix;
 
   constructor(
@@ -120,16 +148,17 @@ export class App {
     const syntax = SyntaxStyle.fromStyles(
       {
         default: {},
-        keyword: { fg: theme.keyword, bold: true },
+        keyword: { fg: theme.keyword },
         string: { fg: theme.string },
         number: { fg: theme.number },
         comment: { fg: theme.comment, italic: true },
         operator: { fg: theme.operator },
         parameter: { fg: theme.parameter },
+        semicolon: { fg: theme.punctuation },
       },
       renderer.nativeScene,
     );
-    for (const kind of ["keyword", "string", "number", "comment", "operator", "parameter"] as const) {
+    for (const kind of ["keyword", "string", "number", "comment", "operator", "parameter", "semicolon"] as const) {
       const id = syntax.getStyleId(kind);
       if (id !== null) this.styleIds[kind] = id;
     }
@@ -142,26 +171,28 @@ export class App {
       onSizeChange: () => {
         this.renderBanner();
         this.renderConnections();
+        this.renderStatus();
       },
     });
-    this.banner = new TextRenderable(renderer, { content: "", height: 1, wrapMode: "none", flexShrink: 0 });
+    this.banner = new TextRenderable(renderer, { content: "", height: 1, wrapMode: "none", flexShrink: 0, bg: theme.surface });
 
     this.connectionsScreen = new BoxRenderable(renderer, { flexDirection: "row", flexGrow: 1 });
-    this.listBox = pane(renderer, "Connections", { width: 44, flexShrink: 0 });
+    [this.listBox, this.listLabel] = section(renderer, { width: 44, flexShrink: 0, backgroundColor: theme.surface });
     this.listText = new TextRenderable(renderer, { content: "", wrapMode: "none", flexGrow: 1 });
     this.listBox.add(this.listText);
-    this.inspectBox = pane(renderer, "Details", { flexGrow: 1 });
-    this.inspectText = new TextRenderable(renderer, { content: "", wrapMode: "word", flexGrow: 1 });
+    [this.inspectBox, this.inspectLabel] = section(renderer, { flexGrow: 1, marginLeft: 1 });
+    this.inspectText = new TextRenderable(renderer, { content: "", wrapMode: "word", flexGrow: 1, marginLeft: 1, marginRight: 1 });
     this.inspectBox.add(this.inspectText);
     this.connectionsScreen.add(this.listBox);
     this.connectionsScreen.add(this.inspectBox);
 
     this.workspace = new BoxRenderable(renderer, { flexDirection: "row", flexGrow: 1, visible: false });
-    this.tablesBox = pane(renderer, "Tables", { width: 32, flexShrink: 0, onSizeChange: () => this.renderTables() });
+    [this.tablesBox, this.tablesLabel] = section(renderer, { width: 32, flexShrink: 0, backgroundColor: theme.surface, onSizeChange: () => this.renderTables() });
     this.tablesText = new TextRenderable(renderer, { content: "", wrapMode: "none", flexGrow: 1 });
     this.tablesBox.add(this.tablesText);
-    const right = new BoxRenderable(renderer, { flexDirection: "column", flexGrow: 1 });
-    this.editorBox = pane(renderer, "SQL", { flexGrow: 1 });
+    const right = new BoxRenderable(renderer, { flexDirection: "column", flexGrow: 1, marginLeft: 1 });
+    const [editorBox, editorLabel] = section(renderer, { flexGrow: 1 });
+    this.editorLabel = editorLabel;
     this.editor = new TextareaRenderable(renderer, {
       flexGrow: 1,
       wrapMode: "none",
@@ -181,7 +212,7 @@ export class App {
       onCursorChange: () => this.cursorMoved(),
       cursorStyle: { style: "block", blinking: false },
     });
-    this.editorBox.add(this.editor);
+    editorBox.add(new LineNumberRenderable(renderer, { target: this.editor, fg: theme.faint, bg: theme.background, minWidth: 3, paddingRight: 1, flexGrow: 1 }));
     this.helix = new Helix({
       text: () => this.editor.plainText,
       cursor: () => this.cursorIndex(this.editor.plainText),
@@ -202,26 +233,23 @@ export class App {
       measure: (text) => this.editor.editBuffer.measureText(text),
       modeChanged: (mode) => this.modeChanged(mode),
     });
-    this.resultsBox = pane(renderer, "Results", { height: "55%", onSizeChange: () => this.renderResults() });
+    [this.resultsBox, this.resultsLabel] = section(renderer, { height: "55%", onSizeChange: () => this.renderResults() });
     this.resultsText = new TextRenderable(renderer, { content: "", wrapMode: "none", flexGrow: 1 });
     this.resultsBox.add(this.resultsText);
-    right.add(this.editorBox);
+    const rule = new TextRenderable(renderer, { content: styled([fg(theme.line)("─".repeat(1000))]), height: 1, wrapMode: "none", flexShrink: 0, marginBottom: 1 });
+    right.add(editorBox);
+    right.add(rule);
     right.add(this.resultsBox);
     this.workspace.add(this.tablesBox);
     this.workspace.add(right);
 
-    this.status = new TextRenderable(renderer, { content: "", height: 1, wrapMode: "none", flexShrink: 0 });
+    this.status = new TextRenderable(renderer, { content: "", height: 1, wrapMode: "none", flexShrink: 0, bg: theme.surface });
 
     this.popupBox = new BoxRenderable(renderer, {
       position: "absolute",
       zIndex: 10,
       visible: false,
-      border: true,
-      borderStyle: "rounded",
-      borderColor: theme.border,
-      backgroundColor: theme.surface,
-      paddingLeft: 1,
-      paddingRight: 1,
+      backgroundColor: theme.raised,
     });
     this.popupText = new TextRenderable(renderer, { content: "", wrapMode: "none" });
     this.popupBox.add(this.popupText);
@@ -525,17 +553,17 @@ export class App {
     const shown = items.slice(top, top + popupRows);
     const labelWidth = Math.min(32, Math.max(...shown.map((i) => i.label.length)));
     const detailWidth = Math.min(36, Math.max(0, ...shown.map((i) => i.detail.length)));
+    const width = 2 + 5 + labelWidth + 2 + detailWidth + 1;
     const lines = shown.map((item, i) => {
       const selected = top + i === popup.index;
       const label = item.label.length > labelWidth ? `${item.label.slice(0, labelWidth - 1)}…` : item.label.padEnd(labelWidth);
       const detail = item.detail.length > detailWidth ? `${item.detail.slice(0, detailWidth - 1)}…` : item.detail.padEnd(detailWidth);
-      const row = [fg(theme.muted)(kindLabel[item.kind].padEnd(5)), fg(theme.text)(label), fg(theme.muted)(`  ${detail}`)];
-      return selected ? row.map((chunk) => bg(theme.selection)(chunk)) : row;
+      const row: Line = [fg(theme.accent)("▎ "), fg(theme.muted)(kindLabel[item.kind].padEnd(5)), fg(theme.text)(label), fg(theme.muted)(`  ${detail}`)];
+      return paint(row, width, selected ? theme.selection : theme.raised);
     });
     this.popupText.content = styled(joinLines(lines));
 
-    const width = 5 + labelWidth + 2 + detailWidth + 4;
-    const height = shown.length + 2;
+    const height = shown.length;
     const text = this.editor.plainText;
     const anchor = this.position(text, popup.result.from);
     const cursorRow = this.editor.visualCursor.visualRow - this.editor.scrollY;
@@ -639,6 +667,7 @@ export class App {
       key.preventDefault();
       this.tableIndex = clamp(this.tableIndex + step, 0, Math.max(0, count - 1));
       this.renderTables();
+      this.renderStatus();
     } else if (key.name === "return") {
       key.preventDefault();
       const row = this.tables?.rows[this.tableIndex];
@@ -692,6 +721,7 @@ export class App {
       key.preventDefault();
       this.grid = moveCursor(this.grid, rows, move[0], move[1], height);
       this.renderResults();
+      this.renderStatus();
     } else if (key.name === "return") {
       key.preventDefault();
       this.openDetail(rows);
@@ -836,6 +866,7 @@ export class App {
     this.say("running…", "info");
     const db = this.connected.db;
     this.userRunning = true;
+    this.renderEditorTitle();
     const sql = statementText(text, span);
     let run: Run;
     try {
@@ -897,10 +928,6 @@ export class App {
     return Math.max(3, this.resultsBox.height - 2);
   }
 
-  private get accent(): string {
-    return this.connected ? environmentColor[this.connected.connection.environment] : theme.accent;
-  }
-
   private renderAll(): void {
     this.renderBanner();
     this.renderConnections();
@@ -912,19 +939,31 @@ export class App {
 
   private renderBanner(): void {
     const c = this.connected?.connection;
+    const place = this.resolution ? path.basename(this.resolution.worktree.root) : "";
+    this.setTitle(c && this.screen === "workspace" ? `${place} › ${c.name}` : "connections");
     if (!c) {
-      this.banner.content = styled([bold(fg(theme.text)(" kowari · not connected"))]);
+      this.banner.bg = theme.surface;
+      this.banner.content = styled(spread([fg(theme.muted)(" not connected")], [], this.renderer.width));
       return;
     }
-    const color = environmentColor[c.environment];
+    const pill = bold(bg(environmentColor[c.environment])(fg(theme.background)(` ● ${c.environment.toUpperCase()} `)));
     const target = c.target.kind === "ready" ? `${c.target.params.user}@${c.target.params.host}:${c.target.params.port}/${c.target.params.database}` : "";
-    const text = ` ${c.environment.toUpperCase()} · ${c.name} · ${target} · Claude: ${c.agent} `;
-    this.banner.content = styled([bold(bg(color)(fg(theme.background)(text.padEnd(this.renderer.width))))]);
+    const claude: Line = [fg(theme.muted)("Claude "), fg(levelColor[c.agent])(c.agent)];
+    const full: Line = [pill, fg(theme.muted)(`  ${target}  `), ...claude];
+    this.banner.bg = environmentWash[c.environment];
+    this.banner.content = styled(spread(lineWidth(full) <= this.renderer.width ? full : [pill, "  ", ...claude], [], this.renderer.width));
+  }
+
+  private setTitle(title: string): void {
+    if (title === this.title) return;
+    this.title = title;
+    this.options.setTitle?.(title);
   }
 
   private renderConnections(): void {
-    setBorder(this.listBox, this.screen === "connections" ? theme.accent : theme.border);
     const connections = this.resolution?.connections ?? [];
+    this.listLabel.content = sectionLabel("CONNECTIONS", this.screen === "connections" && !this.prompt);
+    this.inspectLabel.content = sectionLabel("DETAILS", this.prompt !== null);
     if (connections.length === 0) {
       this.listText.content = styled([fg(theme.muted)("No connections.\n\nAdd .kowari.toml to the repo,\nor ~/.config/kowari/connections.toml")]);
       this.inspectText.content = this.problemsText();
@@ -935,14 +974,15 @@ export class App {
     const maxListWidth = Math.max(fixedColumns + 12, Math.floor(this.renderer.width * 0.6));
     this.listBox.width = Math.min(maxListWidth, longestName + fixedColumns + 4);
     const nameWidth = Math.max(8, Math.min(longestName, maxListWidth - 4 - fixedColumns));
-    const header: Line = [bold(fg(theme.muted)(`    ${"Name".padEnd(nameWidth + 2)}${"Environment".padEnd(14)}Claude`))];
+    const header: Line = [bold(fg(theme.muted)(`     ${"name".padEnd(nameWidth + 2)}${"environment".padEnd(14)}claude`))];
     const rows = connections.map((c, i) => {
       const selected = i === this.connectionIndex;
-      const marker = selected ? fg(theme.accent)("▸ ") : "  ";
-      const active = this.connected?.connection.name === c.name ? fg(theme.good)("● ") : "  ";
+      const marker = selected ? fg(theme.accent)("▎▸ ") : "   ";
+      const active = this.connected?.connection.name === c.name ? fg(theme.ok)("● ") : "  ";
       const shown = c.name.length > nameWidth ? `${c.name.slice(0, nameWidth - 1)}…` : c.name;
       const name = fg(c.target.kind === "unavailable" ? theme.muted : theme.text)(shown.padEnd(nameWidth + 2));
-      return [marker, active, name, fg(environmentColor[c.environment])(c.environment.padEnd(14)), fg(levelColor[c.agent])(c.agent)];
+      const row: Line = [marker, active, name, fg(environmentColor[c.environment])(c.environment.padEnd(14)), fg(levelColor[c.agent])(c.agent)];
+      return selected ? paint(row, this.listBox.width, theme.selection) : row;
     });
     this.listText.content = styled(joinLines([header, ...rows]));
     this.inspectText.content = this.prompt
@@ -950,7 +990,7 @@ export class App {
       : this.confirmingDenies
         ? this.denyConfirmation()
         : this.confirmingForget
-          ? styled(joinLines([[bold(fg(theme.warning)(`Forget the stored password for ${connections[this.connectionIndex]!.name}?`))], [], [fg(theme.muted)("You will be asked for it on the next connect.")], [], [fg(theme.muted)("y forgets it · any other key cancels")]]))
+          ? styled(joinLines(this.card(theme.warning, [[bold(fg(theme.warning)(`Forget the stored password for ${connections[this.connectionIndex]!.name}?`))], [], [fg(theme.muted)("You will be asked for it on the next connect.")], [], hintLine([["y", "forgets it"], ["any other key", "cancels"]])])))
         : this.inspection(connections[this.connectionIndex]!);
   }
 
@@ -965,20 +1005,18 @@ export class App {
     const inner = Math.max(12, Math.min(48, this.inspectBox.width - 8));
     const typed = [...prompt.value].length;
     const dots = "•".repeat(Math.min(typed, inner - 1));
-    const field = (text: string): TextChunk => bg(theme.surface)(fg(theme.text)(text));
+    const field = (text: string): TextChunk => bg(theme.background)(fg(theme.text)(text));
     const lines: Line[] = [
       [bold(fg(theme.text)(`Password for ${prompt.connection.name}`))],
       [fg(theme.muted)(p ? `${p.user}@${p.host}:${p.port}/${p.database}` : "")],
       [],
-      [fg(theme.accent)(`╭${"─".repeat(inner + 2)}╮`)],
-      [fg(theme.accent)("│"), field(` ${dots}`), bg(theme.accent)(" "), field(" ".repeat(inner - dots.length)), fg(theme.accent)("│")],
-      [fg(theme.accent)(`╰${"─".repeat(inner + 2)}╯`)],
+      [field(` ${dots}`), bg(theme.accent)(" "), field(" ".repeat(inner - dots.length))],
       [fg(theme.muted)(typed === 0 ? "type the password" : `${typed} ${typed === 1 ? "character" : "characters"}`)],
       [],
     ];
     if (prompt.error) lines.push([fg(theme.error)(prompt.error)], []);
-    lines.push([fg(theme.muted)("Enter connects and stores it in your keyring · Esc cancels")]);
-    return styled(joinLines(lines));
+    lines.push(hintLine([["⏎", "connects and stores it in your keyring"], ["Esc", "cancels"]]));
+    return styled(joinLines(this.card(theme.accent, lines)));
   }
 
   private denyText(): Line[] {
@@ -995,7 +1033,7 @@ export class App {
   private denyConfirmation(): StyledText {
     const denies = this.denies!;
     return styled(
-      joinLines([
+      joinLines(this.card(theme.warning, [
         [bold(fg(theme.warning)("Keep Claude Code out of your keyring and kowari's config"))],
         [],
         [fg(theme.text)(`Add these to permissions.deny in ${denies.settingsPath}:`)],
@@ -1006,8 +1044,8 @@ export class App {
         [fg(theme.muted)("They stop keyring tools and Claude Code's file tools, not a")],
         [fg(theme.muted)("shell command Claude writes; the Bash sandbox, where on, does.")],
         [],
-        [fg(theme.muted)("y adds them · any other key cancels")],
-      ]),
+        hintLine([["y", "adds them"], ["any other key", "cancels"]]),
+      ])),
     );
   }
 
@@ -1031,8 +1069,11 @@ export class App {
     lines.push(field("Claude", c.agent, levelColor[c.agent]));
     if (c.agentNote) lines.push(field("", c.agentNote, theme.warning));
     lines.push([]);
-    const forget = this.passwordSources.get(c.name) === "keyring" ? " · f forgets the stored password" : "";
-    lines.push([fg(theme.muted)(`Enter connects · r reloads config${forget} · Esc back`)]);
+    const forget = this.passwordSources.get(c.name) === "keyring";
+    const hints: Hint[] = [["⏎", "connects"], ["r", "reloads config"]];
+    if (forget) hints.push(["f", "forgets the stored password"]);
+    if (this.connected) hints.push(["Esc", "back"]);
+    lines.push(hintLine(hints));
     lines.push(...this.denyText());
     const problems = this.resolution?.problems ?? [];
     if (problems.length > 0) {
@@ -1048,94 +1089,136 @@ export class App {
     return styled(joinLines(problems.map((p) => [fg(theme.warning)(`• ${p}`)])));
   }
 
+  private card(stripe: string, lines: Line[]): Line[] {
+    const width = Math.min(Math.max(20, this.inspectBox.width - 2), Math.max(...lines.map(lineWidth)) + 4);
+    return [[], ...lines, []].map((line) => paint([fg(stripe)("▎ "), ...line], width, theme.raised));
+  }
+
   private renderTables(): void {
-    setBorder(this.tablesBox, this.focus === "tables" ? this.accent : theme.border);
+    this.tablesLabel.content = sectionLabel("TABLES", this.focus === "tables");
     if (!this.tables) {
-      this.tablesText.content = styled([fg(theme.muted)("No tables")]);
+      this.tablesText.content = styled([fg(theme.muted)("   No tables")]);
       return;
     }
+    const width = this.tablesBox.width;
     const height = Math.max(1, this.tablesBox.height - 2);
     const top = Math.max(0, Math.min(this.tableIndex - Math.floor(height / 2), this.tables.rows.length - height));
     const lines = this.tables.rows.slice(top, top + height).map((row, i) => {
       const selected = top + i === this.tableIndex;
-      const marker = selected ? fg(this.focus === "tables" ? this.accent : theme.text)("▸ ") : "  ";
+      const focused = selected && this.focus === "tables";
+      const marker = selected ? fg(theme.accent)(focused ? "▎▸ " : " ▸ ") : "   ";
       const schema = String(row[0]);
       const name = schema === "public" ? String(row[1]) : `${schema}.${row[1]}`;
-      return [marker, fg(theme.text)(name.padEnd(18)), fg(theme.muted)(` ${displayValue(row[4])}`)];
+      const size = ` ${displayValue(row[4])} `;
+      const line: Line = [marker, fg(theme.text)(name.padEnd(Math.max(1, width - 3 - size.length))), fg(theme.muted)(size)];
+      return focused ? paint(line, width, theme.selection) : line;
     });
     this.tablesText.content = styled(joinLines(lines));
   }
 
   private renderEditorTitle(): void {
-    setBorder(this.editorBox, this.focus === "editor" ? this.accent : theme.border);
+    this.editorLabel.content = sectionLabel("SQL", this.focus === "editor", [this.userRunning ? fg(theme.warning)("running…") : fg(theme.faint)("ready")]);
   }
 
   private renderResults(): void {
-    setBorder(this.resultsBox, this.focus === "results" ? this.accent : theme.border);
-    const width = Math.max(10, this.resultsBox.width - 4);
+    const focused = this.focus === "results";
+    const width = Math.max(10, this.resultsBox.width - 1);
     const height = this.resultsHeight;
+    const label = (...parts: TextChunk[]) => (this.resultsLabel.content = sectionLabel("RESULTS", focused, parts));
 
     if (this.detail) {
-      this.resultsBox.title = `${this.detail.title} · Esc closes`;
-      this.resultsText.content = styled(joinLines(this.detail.lines.slice(this.detail.top, this.detail.top + height).map((l) => [fg(theme.text)(l)])));
+      label(fg(theme.text)(this.detail.title), fg(theme.muted)("Esc closes"));
+      const body = this.detail.lines.slice(this.detail.top, this.detail.top + height).map((l) => paint([fg(theme.accent)("▎ "), fg(theme.text)(l)], width, theme.raised));
+      this.resultsText.content = styled(joinLines(body));
       return;
     }
 
     const run = this.run;
     if (!run) {
-      this.resultsBox.title = "Results";
+      label();
       this.resultsText.content = "";
       return;
     }
     if (run.result.kind !== "rows") {
-      this.resultsBox.title = `Error · ${formatMs(run.ms)}`;
-      this.resultsText.content = styled([fg(theme.error)(run.result.kind === "error" ? run.result.message : run.result.reason)]);
+      label(fg(theme.error)("error"), fg(theme.muted)(formatMs(run.ms)));
+      this.resultsText.content = styled([fg(theme.error)(`  ${run.result.kind === "error" ? run.result.message : run.result.reason}`)]);
       return;
     }
 
     const rows = run.result;
-    this.resultsBox.title = `${resultSummary(rows)} · ${formatMs(run.ms)}`;
+    label(fg(theme.text)(resultSummary(rows)), fg(theme.muted)(formatMs(run.ms)));
     if (rows.columns.length === 0) {
-      this.resultsText.content = styled([fg(theme.muted)(rows.command ? `${rows.command}${rows.count !== null ? ` ${rows.count}` : ""}` : "done")]);
+      this.resultsText.content = styled([fg(theme.muted)(`  ${rows.command ? `${rows.command}${rows.count !== null ? ` ${rows.count}` : ""}` : "done"}`)]);
       return;
     }
     const laid = layoutGrid(rows, this.grid, width, height);
     this.grid = laid.cursor;
     if (laid.first > 0 || laid.last < laid.total - 1) {
-      this.resultsBox.title = `${resultSummary(rows)} · columns ${laid.first + 1}–${laid.last + 1} of ${laid.total} · ${formatMs(run.ms)}`;
+      label(fg(theme.text)(resultSummary(rows)), fg(theme.muted)(`columns ${laid.first + 1}–${laid.last + 1} of ${laid.total}`), fg(theme.muted)(formatMs(run.ms)));
     }
     this.resultsText.content = styled(joinLines(laid.lines));
   }
 
   private modeBadge(): TextChunk {
     const label = this.helix.mode === "insert" ? " INS " : this.helix.extending ? " EXT " : " NOR ";
-    const pending = this.helix.pendingKey ? ` ${this.helix.pendingKey}…` : "";
-    const color = this.helix.mode === "insert" ? theme.good : this.helix.extending ? theme.warning : theme.accent;
-    return bold(bg(color)(fg(theme.background)(`${label}${pending}`)));
+    const pending = this.helix.pendingKey ? `${this.helix.pendingKey}… ` : "";
+    return pill(`${label}${pending}`);
+  }
+
+  private statusContext(): string {
+    if (this.screen === "connections") {
+      const count = this.resolution?.connections.length ?? 0;
+      return `${count} ${count === 1 ? "connection" : "connections"}`;
+    }
+    if (this.focus === "tables") {
+      const row = this.tables?.rows[this.tableIndex];
+      return row ? `tables · ${row[0]}.${row[1]}` : "tables";
+    }
+    if (this.focus === "results" && this.run?.result.kind === "rows" && this.run.result.rows.length > 0) {
+      return `results · row ${(this.grid.row + 1).toLocaleString("en-US")} · ${this.run.result.columns[this.grid.col]?.name ?? ""}`;
+    }
+    return paneLabel[this.focus];
   }
 
   private renderStatus(): void {
-    const message = this.message ? [fg(this.message.kind === "error" ? theme.error : theme.muted)(` ${this.message.text}`)] : [];
-    if (this.screen === "workspace" && this.focus === "editor") message.unshift(this.modeBadge());
-    const hints =
-      this.screen === "connections"
-        ? " ↑↓ choose · Enter connect · r reload · Ctrl-Q quit"
-        : " Ctrl-Enter run · Ctrl-Space complete · Tab pane · Ctrl-O connections · Ctrl-C cancel · Ctrl-Q quit";
-    this.status.content = styled([...message, fg(theme.muted)(hints)]);
+    const left: Line = [this.screen === "workspace" ? this.modeBadge() : pill(" CONNECT "), " "];
+    left.push(this.message ? fg(this.message.kind === "error" ? theme.error : theme.muted)(this.message.text) : fg(theme.muted)(this.statusContext()));
+    const hints = [...(this.screen === "connections" ? connectionHints : workspaceHints)];
+    let right = [...hintLine(hints), " "];
+    while (hints.length > 0 && lineWidth(left) + lineWidth(right) + 2 > this.renderer.width) {
+      hints.pop();
+      right = [...hintLine(hints), " "];
+    }
+    this.status.content = styled(spread(left, right, this.renderer.width));
   }
 }
 
-function pane(renderer: CliRenderer, title: string, size: Record<string, unknown>): BoxRenderable {
-  return new BoxRenderable(renderer, {
-    ...size,
-    flexDirection: "column",
-    border: true,
-    borderStyle: "rounded",
-    borderColor: theme.border,
-    title,
-    paddingLeft: 1,
-    paddingRight: 1,
-  });
+function section(renderer: CliRenderer, size: Record<string, unknown>): [BoxRenderable, TextRenderable] {
+  const box = new BoxRenderable(renderer, { ...size, flexDirection: "column" });
+  const label = new TextRenderable(renderer, { content: "", height: 1, wrapMode: "none", flexShrink: 0, marginBottom: 1 });
+  box.add(label);
+  return [box, label];
+}
+
+function sectionLabel(name: string, focused: boolean, parts: TextChunk[] = []): StyledText {
+  const color = focused ? theme.accent : theme.muted;
+  return styled([fg(theme.accent)(focused ? "▎" : " "), bold(fg(color)(name)), ...parts.flatMap((part) => [fg(theme.faint)("  ·  "), part])]);
+}
+
+function pill(text: string): TextChunk {
+  return bold(bg(theme.accent)(fg(theme.background)(text)));
+}
+
+function hintLine(hints: Hint[]): Line {
+  return hints.flatMap(([key, label], i) => [...(i > 0 ? ["  "] : []), fg(theme.text)(key), fg(theme.muted)(` ${label}`)]);
+}
+
+function lineWidth(line: Line): number {
+  return line.reduce((sum, part) => sum + Bun.stringWidth(typeof part === "string" ? part : part.text), 0);
+}
+
+function spread(left: Line, right: Line, width: number): Line {
+  return [...left, " ".repeat(Math.max(1, width - lineWidth(left) - lineWidth(right))), ...right];
 }
 
 function isShifted(key: KeyEvent, letter: string): boolean {
@@ -1157,10 +1240,6 @@ function passwordLabel(source: PasswordSource): string {
   }
 }
 
-function setBorder(box: BoxRenderable, color: string): void {
-  box.borderColor = color;
-}
-
 function styled(parts: (string | TextChunk)[]): StyledText {
   return new StyledText(parts.map((part) => (typeof part === "string" ? { __isChunk: true, text: part } : part)));
 }
@@ -1180,7 +1259,7 @@ function listStep(key: KeyEvent): number {
 function resultSummary(rows: Rows): string {
   if (rows.truncated) return `first ${rows.rows.length} rows (more not fetched)`;
   if (rows.columns.length === 0) return rows.command ?? "done";
-  return `${rows.rows.length} ${rows.rows.length === 1 ? "row" : "rows"}`;
+  return `${rows.rows.length.toLocaleString("en-US")} ${rows.rows.length === 1 ? "row" : "rows"}`;
 }
 
 function formatMs(ms: number): string {
