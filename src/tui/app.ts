@@ -14,7 +14,7 @@ import {
   type TextChunk,
 } from "@opentui/core";
 import { listTables } from "../agent/catalog.ts";
-import { addKeyringDenies, checkKeyringDenies, claudeSettingsPath, type DenyCheck } from "../claude/deny.ts";
+import { addDenies, checkDenies, claudeSettingsPath, keyringDenyRules, type DenyCheck } from "../claude/deny.ts";
 import { keyringKey, systemKeyring, type Keyring } from "../connections/keyring.ts";
 import { type ConnectionParams, type Resolution, type ResolvedConnection } from "../connections/resolve.ts";
 import { displayValue } from "../format.ts";
@@ -302,7 +302,7 @@ export class App {
   private async checkDenies(): Promise<DenyCheck> {
     const settingsPath = this.options.claudeSettings ?? claudeSettingsPath();
     try {
-      return await checkKeyringDenies(settingsPath);
+      return await checkDenies(settingsPath);
     } catch (e) {
       return { settingsPath, missing: [], problem: `could not read ${settingsPath} (${e instanceof Error ? e.message : String(e)})` };
     }
@@ -623,7 +623,7 @@ export class App {
 
   private async addDenies(): Promise<void> {
     try {
-      const added = await addKeyringDenies(this.options.claudeSettings ?? claudeSettingsPath());
+      const added = await addDenies(this.options.claudeSettings ?? claudeSettingsPath());
       this.say(`added ${added.length} deny ${added.length === 1 ? "rule" : "rules"} to ${this.denies?.settingsPath}`, "info");
     } catch (e) {
       this.say(`could not add the rules: ${e instanceof Error ? e.message : String(e)}`, "error");
@@ -988,7 +988,7 @@ export class App {
     if (denies.missing.length === 0) return [];
     return [
       [],
-      [fg(theme.warning)(`Claude Code can run keyring tools: ${denies.missing.length} deny ${denies.missing.length === 1 ? "rule is" : "rules are"} missing from ${denies.settingsPath}. D adds them.`)],
+      [fg(theme.warning)(`Claude Code can ${exposure(denies.missing)}: ${denies.missing.length} deny ${denies.missing.length === 1 ? "rule is" : "rules are"} missing from ${denies.settingsPath}. D adds them.`)],
     ];
   }
 
@@ -996,15 +996,15 @@ export class App {
     const denies = this.denies!;
     return styled(
       joinLines([
-        [bold(fg(theme.warning)("Keep Claude Code out of your keyring"))],
+        [bold(fg(theme.warning)("Keep Claude Code out of your keyring and kowari's config"))],
         [],
         [fg(theme.text)(`Add these to permissions.deny in ${denies.settingsPath}:`)],
         [],
         ...denies.missing.map((rule) => [fg(theme.text)(`  ${rule}`)]),
         [],
-        [fg(theme.muted)("The rest of the file keeps its content, though it is rewritten as formatted JSON.")],
-        [fg(theme.muted)("These stop the usual keyring tools, not a script Claude writes itself;")],
-        [fg(theme.muted)("Claude Code's Bash sandbox, where on, blocks the keyring entirely.")],
+        [fg(theme.muted)("The rest of the file is kept, rewritten as formatted JSON.")],
+        [fg(theme.muted)("They stop keyring tools and Claude Code's file tools, not a")],
+        [fg(theme.muted)("shell command Claude writes; the Bash sandbox, where on, does.")],
         [],
         [fg(theme.muted)("y adds them · any other key cancels")],
       ]),
@@ -1223,4 +1223,8 @@ function newlineCounts(text: string): number[] {
   return counts;
 }
 
-
+function exposure(missing: string[]): string {
+  const keyring = missing.some((rule) => keyringDenyRules.includes(rule));
+  const config = missing.some((rule) => !keyringDenyRules.includes(rule));
+  return keyring && config ? "run keyring tools and read or edit kowari's config" : keyring ? "run keyring tools" : "read or edit kowari's config";
+}

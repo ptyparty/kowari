@@ -1,6 +1,7 @@
 import { chmod, mkdir, realpath, rename, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { defaultUserConfigPath, repoConfigFile } from "../connections/resolve.ts";
 
 export const keyringDenyRules = [
   "Bash(secret-tool *)",
@@ -9,26 +10,38 @@ export const keyringDenyRules = [
   "Bash(dbus-send --session --dest=org.freedesktop.secrets *)",
 ];
 
+export function configDenyRules(env: Record<string, string | undefined> = process.env): string[] {
+  const home = env.HOME || os.homedir();
+  const dir = path.dirname(defaultUserConfigPath({ ...env, XDG_CONFIG_HOME: env.XDG_CONFIG_HOME || path.join(home, ".config") }));
+  const inside = path.relative(home, dir);
+  const user = inside && !inside.startsWith("..") && !path.isAbsolute(inside) ? `~/${inside}` : `/${dir}`;
+  return [`Read(${user}/**)`, `Edit(${user}/**)`, `Read(**/${repoConfigFile})`, `Edit(**/${repoConfigFile})`];
+}
+
+export function denyRules(env: Record<string, string | undefined> = process.env): string[] {
+  return [...keyringDenyRules, ...configDenyRules(env)];
+}
+
 export type DenyCheck = { settingsPath: string; missing: string[]; problem: string | null };
 
 export function claudeSettingsPath(env: Record<string, string | undefined> = process.env): string {
   return path.join(env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), ".claude"), "settings.json");
 }
 
-export async function checkKeyringDenies(settingsPath = claudeSettingsPath()): Promise<DenyCheck> {
+export async function checkDenies(settingsPath = claudeSettingsPath(), rules = denyRules()): Promise<DenyCheck> {
   const read = await readSettings(settingsPath);
-  if ("problem" in read) return { settingsPath, missing: keyringDenyRules, problem: read.problem };
+  if ("problem" in read) return { settingsPath, missing: rules, problem: read.problem };
   const deny = denyList(read.settings);
-  return { settingsPath, missing: keyringDenyRules.filter((rule) => !deny.includes(rule)), problem: null };
+  return { settingsPath, missing: rules.filter((rule) => !deny.includes(rule)), problem: null };
 }
 
-export async function addKeyringDenies(settingsPath = claudeSettingsPath()): Promise<string[]> {
+export async function addDenies(settingsPath = claudeSettingsPath(), rules = denyRules()): Promise<string[]> {
   const read = await readSettings(settingsPath);
   if ("problem" in read) throw new Error(read.problem);
   const settings = read.settings;
   const permissions = isObject(settings.permissions) ? settings.permissions : {};
   const deny = Array.isArray(permissions.deny) ? [...permissions.deny] : [];
-  const added = keyringDenyRules.filter((rule) => !deny.includes(rule));
+  const added = rules.filter((rule) => !deny.includes(rule));
   if (added.length === 0) return [];
   const updated = { ...settings, permissions: { ...permissions, deny: [...deny, ...added] } };
   await mkdir(path.dirname(settingsPath), { recursive: true });

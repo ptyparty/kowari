@@ -16,7 +16,7 @@ bun link                                       # puts `kowari` on PATH
 kowari setup --yes                             # teaches Claude to use it, and keeps it out of your keyring
 ```
 
-`kowari setup` lists what kowari adds to Claude Code's config and whether each part is there: the skill, which points Claude at `kowari guide`, linked so it follows this checkout as you update it, and the deny rules that keep keyring tools away from Claude. `--yes` sets up what is missing. `--remove` takes the skill out again but leaves the deny rules, which only protect you.
+`kowari setup` lists what kowari adds to Claude Code's config and whether each part is there: the skill, which points Claude at `kowari guide`, linked so it follows this checkout as you update it, and the deny rules that keep keyring tools away from Claude and stop it reading or editing `.kowari.toml` or your kowari config, where its access is granted. `--yes` sets up what is missing. `--remove` takes the skill out again but leaves the deny rules, which only protect you.
 
 ## Use
 

@@ -1,7 +1,7 @@
 import { readdirSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { addKeyringDenies, checkKeyringDenies, keyringDenyRules } from "./deny.ts";
+import { addDenies, checkDenies, denyRules } from "./deny.ts";
 import { applyLink, backupPath, linkState, removeLink, type Link, type LinkState } from "./links.ts";
 
 type State = LinkState;
@@ -12,8 +12,9 @@ const marks: Record<State, string> = { installed: "✓", missing: "✗", outdate
 
 export const setupUsage = `Usage: kowari setup [--yes|--remove]
   Lists what kowari adds to Claude Code's config: its skill, and the deny rules
-  that keep keyring tools away from Claude. --yes sets up what is missing, and
-  --remove takes the skill out again.`;
+  that keep Claude away from keyring tools and from reading or editing kowari's
+  config.
+  --yes sets up what is missing, and --remove takes the skill out again.`;
 
 export async function setupItems(configDir = claudeConfigDir(), root = repoRoot): Promise<Item[]> {
   const skills = readdirSync(path.join(root, "skills"))
@@ -39,18 +40,18 @@ export async function setupItems(configDir = claudeConfigDir(), root = repoRoot)
 }
 
 async function denyItem(settingsPath: string): Promise<Item> {
-  const check = await checkKeyringDenies(settingsPath);
-  const state: State = check.problem ? "different" : check.missing.length === 0 ? "installed" : check.missing.length < keyringDenyRules.length ? "outdated" : "missing";
+  const check = await checkDenies(settingsPath);
+  const state: State = check.problem ? "different" : check.missing.length === 0 ? "installed" : check.missing.length < denyRules().length ? "outdated" : "missing";
   return {
-    label: "keyring deny rules",
+    label: "deny rules",
     state,
     detail: check.problem ?? (state === "installed" ? "in settings.json" : `${check.missing.length} missing from settings.json`),
     apply: async () => {
       if (check.problem) throw new Error(check.problem);
-      const added = await addKeyringDenies(settingsPath);
+      const added = await addDenies(settingsPath);
       return `added ${added.length} to settings.json`;
     },
-    remove: async () => (state === "installed" || state === "outdated" ? "kept; they keep keyring tools away from Claude, so remove them by hand" : undefined),
+    remove: async () => (state === "installed" || state === "outdated" ? "kept; they keep Claude away from your keyring and kowari's config, so remove them by hand" : undefined),
   };
 }
 

@@ -17,7 +17,7 @@ Default to using Bun instead of Node.js.
 - `src/format.ts`: text and JSON output for results.
 - `src/context.ts`: the socket komux asks for context on Alt shift c, copied from quoll; `src/tui/context.ts` builds what the TUI attaches, which never includes a value from the results.
 - `src/connections/keyring.ts`: passwords in the system keyring (`Bun.secrets`), with a D-Bus lock check so kowari never sets off an unlock prompt; `memoryKeyring` for tests.
-- `src/claude/deny.ts`: checks and adds the Claude Code deny rules that keep keyring tools away from Claude.
+- `src/claude/deny.ts`: checks and adds the Claude Code deny rules that keep keyring tools away from Claude and stop it reading or editing kowari's config files.
 - `src/claude/setup.ts`: `kowari setup`, which links the skill into Claude Code's config and adds the deny rules; `links.ts` is copied from komux.
 - `src/connections/`: resolves the connection list for a worktree from your config, the repo's `.kowari.toml`, and the worktree's `.env`, including what Claude may do with each.
 - `guide/`: the agent's guide, one markdown page per topic, printed by `kowari guide <page>` (`src/guide.ts`, copied from quoll) and starting at `index.md`.

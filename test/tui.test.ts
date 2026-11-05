@@ -3,7 +3,7 @@ import { createTestRenderer, type TestRendererSetup } from "@opentui/core/testin
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { keyringDenyRules } from "../src/claude/deny.ts";
+import { denyRules } from "../src/claude/deny.ts";
 import { keyringKey, memoryKeyring } from "../src/connections/keyring.ts";
 import type { Resolution, ResolvedConnection } from "../src/connections/resolve.ts";
 import { ready } from "../src/sql/tokens.ts";
@@ -86,7 +86,7 @@ async function connectFirst(s: TestRendererSetup): Promise<string> {
 
 describe("kowari TUI", () => {
   beforeAll(async () => {
-    await Bun.write(path.join(scratch, "settings-ok.json"), JSON.stringify({ permissions: { deny: keyringDenyRules } }));
+    await Bun.write(path.join(scratch, "settings-ok.json"), JSON.stringify({ permissions: { deny: denyRules() } }));
   });
 
   test("asks for a missing password, connects, and stores it in the keyring", async () => {
@@ -150,19 +150,19 @@ describe("kowari TUI", () => {
     expect(keyring.entries.size).toBe(0);
   });
 
-  test("offers to add the keyring deny rules to Claude Code's settings", async () => {
+  test("offers to add the keyring and config deny rules to Claude Code's settings", async () => {
     keyring = memoryKeyring();
     const settings = path.join(scratch, "settings-missing.json");
     await Bun.write(settings, JSON.stringify({ model: "opus", permissions: { deny: ["Bash(rm -rf *)"] } }));
     const s = await open([connection("local", "local")], settings);
-    await until(s, (f) => f.includes("4 deny rules are missing"));
+    await until(s, (f) => f.includes("8 deny rules are missing"));
     s.mockInput.pressKey("D", { shift: true });
     await until(s, (f) => f.includes("y adds them"));
     s.mockInput.pressKey("y");
     await until(s, (f) => !f.includes("deny rules are missing") && !f.includes("y adds them"));
     const after = JSON.parse(await readFile(settings, "utf8"));
     expect(after.model).toBe("opus");
-    expect(after.permissions.deny).toEqual(["Bash(rm -rf *)", ...keyringDenyRules]);
+    expect(after.permissions.deny).toEqual(["Bash(rm -rf *)", ...denyRules()]);
   });
 
   test("starts on the connection screen and inspects the selected connection", async () => {
