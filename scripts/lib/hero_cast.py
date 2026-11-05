@@ -69,11 +69,11 @@ def prepare(repo, port):
 
 
 def tour(cast):
-    cast.wait_for('Connections', budget=40)
+    cast.wait_for('CONNECTIONS', budget=40)
     cast.hold(1.5)
     cast.press(DOWN, gap=0.8)
     cast.press('\r', gap=0.3)
-    cast.wait_for('Tables', budget=20, record=True)
+    cast.wait_for('TABLES', budget=20, record=True)
     cast.hold(1.2)
     cast.keys('i', per_key=0.2)
     cast.keys('select * from web', per_key=0.06)
