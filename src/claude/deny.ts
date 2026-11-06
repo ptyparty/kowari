@@ -1,7 +1,7 @@
-import { chmod, mkdir, realpath, rename, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { defaultUserConfigPath, repoConfigFile } from "../connections/resolve.ts";
+import { replaceFile } from "../replace-file.ts";
 
 export const keyringDenyRules = [
   "Bash(secret-tool *)",
@@ -44,13 +44,7 @@ export async function addDenies(settingsPath = claudeSettingsPath(), rules = den
   const added = rules.filter((rule) => !deny.includes(rule));
   if (added.length === 0) return [];
   const updated = { ...settings, permissions: { ...permissions, deny: [...deny, ...added] } };
-  await mkdir(path.dirname(settingsPath), { recursive: true });
-  const target = await realpath(settingsPath).catch(() => settingsPath);
-  const mode = await stat(target).then((st) => st.mode & 0o777, () => 0o600);
-  const temp = `${target}.kowari-${process.pid}`;
-  await writeFile(temp, `${JSON.stringify(updated, null, 2)}\n`, { mode });
-  await chmod(temp, mode);
-  await rename(temp, target);
+  await replaceFile(settingsPath, `${JSON.stringify(updated, null, 2)}\n`);
   return added;
 }
 

@@ -53,6 +53,7 @@ function connection(name: string, environment: ResolvedConnection["environment"]
     environment,
     agent: "read-only",
     agentNote: null,
+    agentSet: true,
     target: ready
       ? { kind: "ready", params: { host: u.hostname, port: Number(u.port), database: db.name, user: u.username, password, sslmode: "prefer", sslrootcert: null } }
       : { kind: "unavailable", reason: "APP_DB_PORT not set" },

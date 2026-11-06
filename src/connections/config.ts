@@ -19,10 +19,12 @@ export type Definition = {
 export type Grant = { agent: AgentLevel; hosts: string[] };
 
 export type UserConfig = {
-  connections: Map<string, { definition: Definition; agent: AgentLevel; environment: Environment }>;
+  connections: Map<string, UserConnection>;
   repos: Map<string, Map<string, Grant>>;
   localHosts: string[];
 };
+
+export type UserConnection = { definition: Definition; agent: AgentLevel; agentSet: boolean; environment: Environment };
 
 export type RepoConfig = { connections: Map<string, Definition> };
 
@@ -33,7 +35,7 @@ const definitionFields = ["host", "port", "database", "user", "password", "sslmo
 export function parseUserConfig(text: string, source: string): Parsed<UserConfig> {
   const problems: string[] = [];
   const doc = parseToml(text, source, problems);
-  const connections = new Map<string, { definition: Definition; agent: AgentLevel; environment: Environment }>();
+  const connections = new Map<string, UserConnection>();
   const repos = new Map<string, Map<string, Grant>>();
 
   for (const [name, raw] of tableEntries(doc.connections, `${source}: connections`, problems)) {
@@ -41,7 +43,7 @@ export function parseUserConfig(text: string, source: string): Parsed<UserConfig
     const definition = parseDefinition(raw, where, problems, ["agent", "environment"]);
     const agent = raw.agent === undefined ? "none" : parseLevel(raw.agent, `${where}.agent`, problems);
     const environment = raw.environment === undefined ? "production" : parseEnvironment(raw.environment, `${where}.environment`, problems);
-    if (definition) connections.set(name, { definition, agent, environment });
+    if (definition) connections.set(name, { definition, agent, agentSet: raw.agent !== undefined, environment });
   }
 
   for (const [identity, raw] of tableEntries(doc.repos, `${source}: repos`, problems)) {

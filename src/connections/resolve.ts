@@ -30,6 +30,7 @@ export type ResolvedConnection = {
   environment: Environment;
   agent: AgentLevel;
   agentNote: string | null;
+  agentSet: boolean;
   target: { kind: "ready"; params: ConnectionParams } | { kind: "unavailable"; reason: string };
 };
 
@@ -77,6 +78,7 @@ export async function resolveConnections(options: ResolveOptions): Promise<Resol
       environment: entry.environment,
       agent: entry.agent,
       agentNote: null,
+      agentSet: entry.agentSet,
       target: resolveTarget(entry.definition, lookup, path.dirname(userPath)),
     });
   }
@@ -87,10 +89,11 @@ export async function resolveConnections(options: ResolveOptions): Promise<Resol
       continue;
     }
     const target = resolveTarget(definition, lookup, worktree.root);
-    const { agent, agentNote } = applyGrant(grants.get(name), target, localHosts);
+    const grant = grants.get(name);
+    const { agent, agentNote } = applyGrant(grant, target, localHosts);
     const host = target.kind === "ready" ? target.params.host : resolvedHost(definition, lookup);
     const environment = host !== null && isLocal(localHosts, host) ? "local" : "production";
-    connections.push({ name, source: "repo", environment, agent, agentNote, target });
+    connections.push({ name, source: "repo", environment, agent, agentNote, agentSet: grant !== undefined, target });
   }
 
   for (const name of exact ? grants.keys() : []) {
@@ -109,7 +112,7 @@ export function describeTarget(connection: ResolvedConnection): string {
   return `${p.user}@${p.host}:${p.port}/${p.database} (password ${p.password === null ? "missing" : "set"}${ssl})`;
 }
 
-function grantsFor(repos: UserConfig["repos"], worktree: Worktree): { grants: Map<string, Grant>; exact: boolean } {
+export function grantsFor(repos: UserConfig["repos"], worktree: Worktree): { grants: Map<string, Grant>; exact: boolean } {
   if (worktree.identity === null) return { grants: new Map(), exact: false };
   const exact = repos.get(worktree.identity);
   if (exact) return { grants: exact, exact: true };

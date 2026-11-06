@@ -1,8 +1,16 @@
 #!/usr/bin/env bun
+import { askForAccess, oneLine, shouldAskForAccess, type Wants } from "./agent/ask-access.ts";
+import { gateStatement } from "./agent/gate.ts";
 import { describeTable, listTables } from "./agent/catalog.ts";
 import { defaultAgentLimits, type AgentResult } from "./agent/read-only.ts";
 import { openAgentSession, type AgentSession } from "./agent/session.ts";
-import { describeTarget, resolveConnections, type Resolution } from "./connections/resolve.ts";
+import {
+  defaultUserConfigPath,
+  describeTarget,
+  resolveConnections,
+  type Resolution,
+  type ResolvedConnection,
+} from "./connections/resolve.ts";
 import { formatRows, rowsAsJson } from "./format.ts";
 import { guideCommand } from "./guide.ts";
 
@@ -15,7 +23,7 @@ const usage = `Usage:
                                       Columns, constraints, indexes, and foreign keys pointing at a table
   kowari guide [page]                 Print a page of the guide for agents querying through kowari;
                                       index (the default) links to the rest
-  kowari setup [--yes|--remove]       List kowari's skill and keyring deny rules in Claude Code's config,
+  kowari setup [--yes|--remove]       List kowari's skill and deny rules in Claude Code's config,
                                       set up what is missing, or remove the skill
 
 Options:
@@ -24,7 +32,8 @@ Options:
   --max-rows <n>    Stop after n rows (default ${defaultAgentLimits.maxRows})
 
 connections, query, tables and describe are for Claude: they obey each connection's agent level.
-A connection Claude has no access to is refused, read-only connections
+A connection Claude has no access to is refused (inside komux, kowari first
+asks you about a local one your config says nothing about), read-only connections
 run through every read-only layer, and writes on approve-writes
 connections are refused until the kowari TUI can approve them.
 
@@ -54,16 +63,19 @@ async function main(argv: string[]): Promise<number> {
   switch (command) {
     case "connections":
       return listConnections(options, rest);
-    case "query":
-      return withSession(options, rest[0], async (session) => {
-        const text = await statementText(rest.slice(1));
-        return printResult(session.query(text), options);
-      });
+    case "query": {
+      const text = rest[0] ? await statementText(rest.slice(1)) : "";
+      return withSession(options, rest[0], () => wantsFor(text), (session) => printResult(session.query(text), options));
+    }
     case "tables":
-      return withSession(options, rest[0], (session) => printResult(listTables(session.query), options));
+      return withSession(options, rest[0], async () => ({ level: "read-only", action: "list its tables" }), (session) =>
+        printResult(listTables(session.query), options),
+      );
     case "describe":
       if (!rest[1]) throw new UsageError("describe needs a table name");
-      return withSession(options, rest[0], (session) => printDescription(session, rest[1]!, options));
+      return withSession(options, rest[0], async () => ({ level: "read-only", action: `describe the table ${JSON.stringify(oneLine(rest[1]!))}` }), (session) =>
+        printDescription(session, rest[1]!, options),
+      );
     case undefined:
       if (!process.stdin.isTTY || !process.stdout.isTTY) {
         console.log(usage);
@@ -147,16 +159,19 @@ function printProblems(resolution: Resolution): void {
 async function withSession(
   options: Options,
   name: string | undefined,
+  wants: () => Promise<Wants>,
   run: (session: AgentSession) => Promise<number>,
 ): Promise<number> {
   if (!name) throw new UsageError("which connection? (kowari connections lists them)");
   const resolution = await resolveConnections({ cwd: options.cwd });
-  const connection = resolution.connections.find((c) => c.name === name);
-  if (!connection) {
+  const found = resolution.connections.find((c) => c.name === name);
+  if (!found) {
     const known = resolution.connections.map((c) => c.name).join(", ") || "none";
     console.error(`kowari: no connection named ${name} in this worktree (known: ${known})`);
     return 1;
   }
+  const connection = await withAccessAnswer(found, resolution, wants);
+  if (connection === null) return 1;
 
   let outcome;
   try {
@@ -175,6 +190,35 @@ async function withSession(
   } finally {
     await outcome.session.close();
   }
+}
+
+async function withAccessAnswer(
+  connection: ResolvedConnection,
+  resolution: Resolution,
+  wants: () => Promise<Wants>,
+): Promise<ResolvedConnection | null> {
+  if (!shouldAskForAccess(connection)) return connection;
+  const userConfigPath = defaultUserConfigPath();
+  const answer = await askForAccess(connection, { worktree: resolution.worktree, wants: await wants(), userConfigPath });
+  if (answer.kind === "unanswered") {
+    console.error(`kowari: refused: Claude has no access to ${connection.name}; kowari asked the user, but ${answer.reason}`);
+    return null;
+  }
+  if (answer.recorded?.kind === "recorded") {
+    console.error(`kowari: the user recorded Claude's access to ${connection.name} as ${answer.level} in ${userConfigPath}`);
+  } else if (answer.recorded?.kind === "failed") {
+    console.error(`kowari: the user chose ${answer.level} for ${connection.name}, but it was not recorded: ${answer.recorded.reason}`);
+  }
+  if (answer.level === "none") {
+    console.error(`kowari: refused: the user declined Claude access to ${connection.name}`);
+    return null;
+  }
+  return { ...connection, agent: answer.level, agentSet: true };
+}
+
+async function wantsFor(text: string): Promise<Wants> {
+  const reads = (await gateStatement(text)).ok;
+  return { level: reads ? "read-only" : "write", action: reads ? "run a statement that reads" : "run a statement that writes", sql: text };
 }
 
 async function statementText(args: string[]): Promise<string> {

@@ -24,6 +24,7 @@ function passwordless(): ResolvedConnection {
     environment: "testing",
     agent: "write",
     agentNote: null,
+    agentSet: true,
     target: { kind: "ready", params: { host: u.hostname, port: Number(u.port), database: db.name, user: u.username, password: null, sslmode: "prefer", sslrootcert: null } },
   };
 }

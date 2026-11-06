@@ -84,6 +84,8 @@ Grants are keyed by the repo's origin remote and the connection's name. Claude's
 | `approve-writes` | Reads run; writes are refused until the TUI can approve them. |
 | `write` | Statements run as sent. |
 
+When Claude asks for a local connection your config says nothing about, and kowari runs inside komux, kowari pops up a form: what Claude wants to do, with its SQL, and whether it may have no access, read-only, or write, with what it asked for picked. Read-only is left out when the connection's role can write, since the role check would refuse it; grant `write`, or give the connection a role that can only read. Tick "record it" to keep the answer in your config, and a recorded `none` stops the question; otherwise the answer holds for that one command.
+
 `approve-writes` and `write` grants on a repo's connections only hold while the connection points at a local host: `localhost`, a loopback address, a compose service, or a host you list under `[local] hosts` or in the grant itself (`local = { agent = "write", hosts = ["db.internal"] }`). Pointed anywhere else, the connection drops to `none` for Claude, so a repo file can't aim a granted name at a shared database.
 
 ## Tests

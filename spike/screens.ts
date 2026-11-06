@@ -42,6 +42,7 @@ const connection = (name: string, environment: ResolvedConnection["environment"]
   environment,
   agent,
   agentNote: null,
+  agentSet: true,
   target: { kind: "ready", params },
 });
 const resolution: Resolution = {

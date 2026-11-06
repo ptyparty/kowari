@@ -11,7 +11,7 @@ import {
 
 export type AgentSession = { connection: ResolvedConnection; query: (text: string) => Promise<AgentResult>; close: () => Promise<void> };
 
-export type SessionOutcome = { kind: "open"; session: AgentSession } | { kind: "refused"; reason: string };
+export type SessionOutcome = { kind: "open"; session: AgentSession } | { kind: "refused"; reason: string; writableRole?: true };
 
 export async function openAgentSession(
   connection: ResolvedConnection,
@@ -45,6 +45,7 @@ export async function openAgentSession(
     return {
       kind: "refused",
       reason: `${connection.name} is marked read-only, but its role ${params.user} could change the database:\n${problems}`,
+      writableRole: true,
     };
   }
 
