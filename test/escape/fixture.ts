@@ -47,6 +47,10 @@ export async function makeFixture(): Promise<Fixture> {
     alter function definer_bump() owner to ${appRole};
     create function definer_dblink(conninfo text) returns text language sql security definer as $$
       select dblink_exec(conninfo, 'update victim set v = ''remote''') $$;
+    create function refresh_cache(conninfo text) returns text language sql as $$
+      select dblink_exec(conninfo, 'update victim set v = ''refreshed''') $$;
+    create function kick(pid int) returns boolean language sql as $$
+      select pg_terminate_backend(pid) $$;
   `).simple();
   await createAgentRole(tpl, role, password);
   await tpl.end({ timeout: 1 });

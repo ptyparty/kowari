@@ -37,6 +37,20 @@ export const vectors: Vector[] = [
   },
   { name: "explain analyze create table as", sql: () => "explain analyze create table evil as select * from victim" },
   { name: "terminate another backend", sql: (c) => `select pg_terminate_backend(${c.canaryPid})` },
+  {
+    name: "invoker function calling dblink",
+    sql: (c) => `select refresh_cache('host=127.0.0.1 dbname=${c.database} user=kowari password=${c.adminPassword}')`,
+  },
+  { name: "function terminating a backend", sql: (c) => `select kick(${c.canaryPid})` },
+  {
+    name: "terminate from inside ts_stat",
+    sql: (c) => `select * from ts_stat('select to_tsvector(pg_terminate_backend(${c.canaryPid})::text)')`,
+  },
+  {
+    name: "dblink from inside ts_stat",
+    sql: (c) =>
+      `select * from ts_stat($q$select to_tsvector(dblink_exec('host=127.0.0.1 dbname=${c.database} user=kowari password=${c.adminPassword}', 'update victim set v = ''ts''')) $q$)`,
+  },
   { name: "large object create", sql: () => "select lo_create(0)" },
   { name: "lo_import server file", sql: () => "select lo_import('/etc/hostname')" },
   { name: "read server file", sql: () => "select pg_read_file('/etc/hostname')" },

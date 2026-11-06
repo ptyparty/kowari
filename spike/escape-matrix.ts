@@ -12,6 +12,7 @@ const columns: Column[] = [
   { label: "1 parse gate", layers: { gate: true, transaction: false, roleCheck: false }, asAgent: false, hardened: false },
   { label: "2 read-only txn", layers: { gate: false, transaction: true, roleCheck: false }, asAgent: false, hardened: false },
   { label: "4 agent role", layers: { gate: false, transaction: false, roleCheck: false }, asAgent: true, hardened: false },
+  { label: "1+2, owner, no role check", layers: { gate: true, transaction: true, roleCheck: false }, asAgent: false, hardened: false },
   { label: "all, remote access revoked", layers: { gate: true, transaction: true, roleCheck: true }, asAgent: true, hardened: true },
 ];
 
