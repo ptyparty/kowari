@@ -108,8 +108,6 @@ async function runQuery(sql: Sql, text: string, limits: AgentLimits, layers: Lay
 
 export type Cancellable = { cancel: () => unknown };
 
-const utilityWithRows = /^\s*(?:(?:--[^\n]*(?:\n|$)|\/\*[\s\S]*?\*\/)\s*)*(?:show|explain)\b/i;
-
 function asText(value: unknown): unknown {
   return value instanceof Uint8Array ? Buffer.from(value).toString("utf8") : value;
 }
@@ -146,12 +144,7 @@ export async function collectRows(
     return true;
   };
 
-  const result = utilityWithRows.test(text)
-    ? await query.then((all) => {
-        take(all as unknown as unknown[][]);
-        return all;
-      })
-    : await query.cursor(100, (page) => (take(page as unknown as unknown[][]) ? undefined : sql.CLOSE));
+  const result = await query.cursor(100, (page) => (take(page as unknown as unknown[][]) ? undefined : sql.CLOSE));
 
   if (columns.length === 0 && !truncated) {
     const described = await conn.unsafe(text, [], { simple: false }).describe();
@@ -165,7 +158,7 @@ export async function collectRows(
     rows,
     truncated,
     command: truncated ? null : (executed?.command ?? null),
-    count: truncated ? null : (executed?.count ?? null),
+    count: truncated ? null : columns.length > 0 ? rows.length : (executed?.count ?? null),
   };
 }
 
