@@ -1,51 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { KeyEvent } from "@opentui/core";
-import { Helix, type EditorPort, type Mode } from "./helix.ts";
-
-class FakeEditor implements EditorPort {
-  cursorAt = 0;
-  selected: [number, number] | null = null;
-  modes: Mode[] = [];
-
-  constructor(public value: string) {}
-
-  text = () => this.value;
-  cursor = () => this.cursorAt;
-  setCursor = (i: number) => {
-    this.cursorAt = i;
-  };
-  showSelection = (start: number, end: number) => {
-    this.selected = [start, end];
-  };
-  clearSelection = () => {
-    this.selected = null;
-  };
-  replace = (start: number, end: number, insert: string) => {
-    this.value = this.value.slice(0, start) + insert + this.value.slice(end);
-    this.cursorAt = start + insert.length;
-  };
-  restore = (text: string) => {
-    this.value = text;
-  };
-  measure = (text: string) => [...text].reduce((n, c) => n + (/[\u3000-\u9fff]/.test(c) ? 2 : 1), 0);
-  modeChanged = (mode: Mode) => {
-    this.modes.push(mode);
-  };
-
-  type(text: string): void {
-    this.replace(this.cursorAt, this.cursorAt, text);
-  }
-
-  get selectedText(): string | null {
-    return this.selected ? this.value.slice(this.selected[0], this.selected[1]) : null;
-  }
-}
-
-function key(spec: string): KeyEvent {
-  const named = ["escape", "left", "right", "up", "down", "home", "end"];
-  if (named.includes(spec)) return { name: spec, ctrl: false, meta: false, shift: false, option: false, sequence: "" } as unknown as KeyEvent;
-  return { name: spec.toLowerCase(), ctrl: false, meta: false, shift: spec !== spec.toLowerCase(), option: false, sequence: spec } as unknown as KeyEvent;
-}
+import { FakeEditor, key } from "../../test/support/editor.ts";
+import { Helix } from "./helix.ts";
 
 function setup(text: string, cursor = 0): { editor: FakeEditor; helix: Helix; press: (...keys: string[]) => void } {
   const editor = new FakeEditor(text);

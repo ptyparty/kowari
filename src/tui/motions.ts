@@ -2,9 +2,9 @@ export type Range = { anchor: number; head: number };
 
 export type Measure = (text: string) => number;
 
-type CharClass = "word" | "punct" | "space" | "eol";
+export type CharClass = "word" | "punct" | "space" | "eol";
 
-function classAt(text: string, i: number): CharClass {
+export function classAt(text: string, i: number): CharClass {
   const c = text.codePointAt(i);
   if (c === undefined || c === 10) return "eol";
   if (c === 32 || c === 9) return "space";

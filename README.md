@@ -34,11 +34,13 @@ kowari setup [--yes|--remove]           list, add, or remove kowari's skill and 
 
 Keys: Space opens a menu wherever it isn't text (the editor in normal mode, the tables, the results, the connection screen), and Space ? lists every key for where you are. Space f finds a table by name and selects its first 100 rows; Space c is the connection screen, also on Ctrl-O.
 
+In vi mode, normal mode has motions with counts (`hjkl`, `w b e`, `0 ^ $`, `gg G`, `f t F T` with `;` and `,`, `%`); the operators `d c y`, doubled for whole lines, and the text objects `iw aw i( a( i[ i{ i' i"`; `x X D C s S r R J ~ p P`; `v` and `V` for visual mode; and `u` with Ctrl-R to undo and redo. There, Ctrl-R is redo, so the history is on Ctrl-R in insert mode and the other panes, and on Space h.
+
 Every statement you run in the TUI goes into a history in `$XDG_STATE_HOME/kowari/history.jsonl` (`~/.local/state/kowari/` by default), readable only by you. Each query is kept once, with the time it last ran and its connection. Ctrl-R, or Space h, searches it. It shows the queries containing every word you type, the current connection's first and then newest first, and Enter puts the one you pick in the editor, replacing what is there (`u` brings it back). Claude's queries through the CLI are never recorded.
 
 - Connection screen: `↑`/`↓` choose · Enter connect · `r` reload.
 - Everywhere in the workspace: Ctrl-Enter or F5 run the statement under the cursor · Ctrl-R search the history · Tab switch pane · Ctrl-C cancel · Ctrl-Q quit.
-- Editor: helix keys, with Ctrl-Space to complete in insert mode, `/` to search the SQL (`n`/`N` for the next and previous match), and `:` for a command line, where `:q` quits.
+- Editor: helix keys, or vi keys with `editor = "vi"` at the top of your config, with Ctrl-Space to complete in insert mode, `/` to search the SQL (`n`/`N` for the next and previous match), and `:` for a command line, where `:q` quits.
 - Results: `hjkl` or arrows move · Enter opens the cell · `/` searches the cells, highlighting the matches (`n`/`N` step through them, Esc clears) · `y` copies the cell and `Y` the row.
 
 Inside komux, kowari tells komux its keys for where you are, so komux's palette can list and run them.

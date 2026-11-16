@@ -5,6 +5,7 @@ import {
   parseUserConfig,
   type AgentLevel,
   type Definition,
+  type EditorKind,
   type Environment,
   type Grant,
   type UserConfig,
@@ -39,6 +40,7 @@ export type Resolution = {
   worktree: Worktree;
   connections: ResolvedConnection[];
   problems: string[];
+  editor: EditorKind;
 };
 
 export type ResolveOptions = {
@@ -104,7 +106,7 @@ export async function resolveConnections(options: ResolveOptions): Promise<Resol
     }
   }
 
-  return { worktree, connections, problems };
+  return { worktree, connections, problems, editor: user?.editor ?? "helix" };
 }
 
 export function describeTarget(connection: ResolvedConnection): string {

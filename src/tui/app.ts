@@ -17,6 +17,7 @@ import {
 import path from "node:path";
 import { listTables } from "../agent/catalog.ts";
 import { addDenies, checkDenies, claudeSettingsPath, keyringDenyRules, type DenyCheck } from "../claude/deny.ts";
+import type { EditorKind } from "../connections/config.ts";
 import { keyringKey, systemKeyring, type Keyring } from "../connections/keyring.ts";
 import { type ConnectionParams, type Resolution, type ResolvedConnection } from "../connections/resolve.ts";
 import { displayValue } from "../format.ts";
@@ -28,11 +29,13 @@ import { scan, type TokenKind } from "../sql/tokens.ts";
 import type { Attachment, KeyGroup } from "../context.ts";
 import { kowariContext } from "./context.ts";
 import { Database, type Run } from "./database.ts";
-import { Helix, type Mode } from "./helix.ts";
+import { Helix } from "./helix.ts";
+import { Vi } from "./vi.ts";
 import { defaultHistoryPath, loadHistory, oneLine, recordHistory, searchHistory, type HistoryEntry } from "./history.ts";
 import { clamp, layoutGrid, lineWidth, moveCursor, paint, searchCells, type CellAt, type GridCursor, type Line, type Rows } from "./grid.ts";
 import { groupsFor, helpContexts, menuAction, opensMenu, menuEntries, menuGroups, type KeyContext, type MenuAction } from "./keys.ts";
 import { fuzzyFilter } from "./match.ts";
+import type { EditorPort, ModalEditor, Mode } from "./modal.ts";
 import { environmentColor, environmentWash, levelColor, theme } from "./theme.ts";
 
 const selectionBg = RGBA.fromHex(theme.selection);
@@ -181,7 +184,9 @@ export class App {
   private gridSearch = "";
   private matches: Matches | null = null;
   private title = "";
-  private readonly helix: Helix;
+  private modal: ModalEditor;
+  private editorKind: EditorKind = "helix";
+  private readonly port: EditorPort;
 
   constructor(
     private readonly renderer: CliRenderer,
@@ -256,7 +261,7 @@ export class App {
       cursorStyle: { style: "block", blinking: false },
     });
     editorBox.add(new LineNumberRenderable(renderer, { target: this.editor, fg: theme.faint, bg: theme.background, minWidth: 3, paddingRight: 1, flexGrow: 1 }));
-    this.helix = new Helix({
+    this.port = {
       text: () => this.editor.plainText,
       cursor: () => this.cursorIndex(this.editor.plainText),
       setCursor: (index) => {
@@ -275,7 +280,8 @@ export class App {
       },
       measure: (text) => this.editor.editBuffer.measureText(text),
       modeChanged: (mode) => this.modeChanged(mode),
-    });
+    };
+    this.modal = new Helix(this.port);
     [this.resultsBox, this.resultsLabel] = section(renderer, { height: "55%", onSizeChange: () => this.renderResults() });
     this.resultsText = new TextRenderable(renderer, { content: "", wrapMode: "none", flexGrow: 1 });
     this.resultsBox.add(this.resultsText);
@@ -344,20 +350,20 @@ export class App {
       return kowariContext({ kind: "results", connection, sql: this.runSql, row: this.grid.row + 1, column: column.name, table: table ? `${table.schema}.${table.name}` : null });
     }
     const text = this.editor.plainText;
-    const { anchor, head } = this.helix.selection;
+    const { anchor, head } = this.modal.selection;
     const span = statementAt(text, this.cursorIndex(text));
     const sql = anchor !== head ? text.slice(Math.min(anchor, head), Math.max(anchor, head) + 1) : span ? statementText(text, span) : "";
     return sql.trim() ? kowariContext({ kind: "sql", connection, sql }) : "No SQL to attach in kowari";
   }
 
   keys(): KeyGroup[] {
-    return this.overlay?.kind === "menu" ? menuGroups(this.overlay.from) : groupsFor([this.keyContext()]);
+    return this.overlay?.kind === "menu" ? menuGroups(this.overlay.from) : groupsFor([this.keyContext()], this.editorKind);
   }
 
   private keyContext(): KeyContext {
     if (this.overlay) return this.overlay.kind;
     if (this.screen === "connections") return this.prompt ? "password" : this.confirmingDenies || this.confirmingForget ? "confirm" : "connections";
-    if (this.focus === "editor") return this.popup ? "completion" : this.helix.mode === "insert" ? "insert" : "normal";
+    if (this.focus === "editor") return this.popup ? "completion" : this.modal.mode === "normal" ? "normal" : "insert";
     if (this.focus === "tables") return "tables";
     if (this.detail) return "detail";
     return this.gridRows ? "grid" : "results";
@@ -376,7 +382,7 @@ export class App {
     this.editor.editBuffer.setText(text);
     this.moveCursorToEnd();
     this.highlight();
-    this.helix.reset();
+    this.modal.reset();
   }
 
   private moveCursorToEnd(): void {
@@ -385,12 +391,20 @@ export class App {
     this.editor.editBuffer.setCursor(lines.length - 1, this.editor.editBuffer.measureText(last));
   }
 
+  private useEditor(kind: EditorKind): void {
+    if (kind === this.editorKind) return;
+    this.editorKind = kind;
+    this.modal = kind === "vi" ? new Vi(this.port) : new Helix(this.port);
+    this.modal.reset();
+  }
+
   private get keyring(): Keyring {
     return this.options.keyring ?? systemKeyring;
   }
 
   private async reload(): Promise<void> {
     this.resolution = await this.options.resolve();
+    this.useEditor(this.resolution.editor);
     this.connectionIndex = Math.min(this.connectionIndex, Math.max(0, this.resolution.connections.length - 1));
     this.renderAll();
     await this.refreshPasswordSources().catch(() => {});
@@ -441,9 +455,9 @@ export class App {
       }
       return;
     }
-    if (this.screen !== "workspace" || this.focus !== "editor" || this.helix.mode !== "normal") return;
+    if (this.screen !== "workspace" || this.focus !== "editor" || this.modal.mode === "insert") return;
     event.preventDefault();
-    this.helix.pasteText(new TextDecoder().decode(event.bytes).replaceAll("\r\n", "\n").replaceAll("\r", "\n"));
+    this.modal.pasteText(new TextDecoder().decode(event.bytes).replaceAll("\r\n", "\n").replaceAll("\r", "\n"));
     this.highlight();
   };
 
@@ -477,7 +491,7 @@ export class App {
       this.showScreen("connections");
       return;
     }
-    if (key.ctrl && key.name === "r") {
+    if (key.ctrl && key.name === "r" && !(this.focus === "editor" && this.modal.claims(key))) {
       key.preventDefault();
       void this.openHistory();
       return;
@@ -497,11 +511,11 @@ export class App {
       return;
     }
     if (this.focus === "editor") {
-      if (this.helix.mode === "normal" && !this.helix.pendingKey && this.editorKey(key)) {
+      if (this.modal.mode === "normal" && !this.modal.pendingKey && this.editorKey(key)) {
         key.preventDefault();
         return;
       }
-      if (this.helix.handle(key)) {
+      if (this.modal.handle(key)) {
         key.preventDefault();
         this.renderStatus();
       }
@@ -650,7 +664,7 @@ export class App {
   }
 
   private replaceText(text: string): void {
-    this.helix.beforeExternalChange();
+    this.modal.beforeExternalChange();
     this.setText(text);
     this.focus = "editor";
     this.renderAll();
@@ -701,7 +715,7 @@ export class App {
 
   private searchEditor(query: string): void {
     if (query === "") return;
-    if (!this.helix.search(query)) this.say(`no match for /${query}`, "error");
+    if (!this.modal.search(query)) this.say(`no match for /${query}`, "error");
     this.renderStatus();
   }
 
@@ -777,7 +791,7 @@ export class App {
 
   private completionKey(key: KeyEvent): boolean {
     if (key.ctrl && key.name === "space") {
-      if (this.helix.mode === "insert") this.openCompletion(true);
+      if (this.modal.mode === "insert") this.openCompletion(true);
       return true;
     }
     if (!this.popup) return false;
@@ -810,7 +824,7 @@ export class App {
   }
 
   private completeAfterEdit(): void {
-    if (this.focus !== "editor" || !this.connected || this.helix.mode !== "insert") return;
+    if (this.focus !== "editor" || !this.connected || this.modal.mode !== "insert") return;
     const text = this.editor.plainText;
     if (text === this.acceptedText) return;
     this.acceptedText = null;
@@ -866,7 +880,7 @@ export class App {
   }
 
   private cursorMoved(): void {
-    if (this.helix.mode === "normal") this.helix.follow(this.cursorIndex(this.editor.plainText));
+    if (this.modal.mode === "normal") this.modal.follow(this.cursorIndex(this.editor.plainText));
     if (!this.popup) return;
     const text = this.editor.plainText;
     const result = complete(text, this.cursorIndex(text), this.catalog);
@@ -1055,12 +1069,12 @@ export class App {
     }
     const select = `select * from ${quoteIdent(table.schema)}.${quoteIdent(table.name)} limit 100;`;
     const existing = this.editor.plainText.trimEnd();
-    this.helix.beforeExternalChange();
+    this.modal.beforeExternalChange();
     this.editor.editBuffer.setCursor(0, 0);
     this.moveCursorToEnd();
     this.editor.editBuffer.insertText(`${existing === "" ? "" : "\n\n"}${select}`);
     this.highlight();
-    this.helix.reset();
+    this.modal.reset();
     void this.runStatementUnderCursor();
   }
 
@@ -1544,7 +1558,7 @@ export class App {
   }
 
   private helpLines(help: Extract<Overlay, { kind: "help" }>): Line[] {
-    const groups = groupsFor(helpContexts(help.from));
+    const groups = groupsFor(helpContexts(help.from), this.editorKind);
     const keyWidth = Math.max(...groups.flatMap((g) => g.commands.map((c) => Bun.stringWidth(c.keys))));
     const labelWidth = Math.max(...groups.flatMap((g) => g.commands.map((c) => c.label.length)));
     const columnWidth = keyWidth + 2 + labelWidth;
@@ -1691,9 +1705,8 @@ export class App {
   }
 
   private modeBadge(): TextChunk {
-    const label = this.helix.mode === "insert" ? " INS " : this.helix.extending ? " EXT " : " NOR ";
-    const pending = this.helix.pendingKey ? `${this.helix.pendingKey}… ` : "";
-    return pill(`${label}${pending}`);
+    const pending = this.modal.pendingKey ? `${this.modal.pendingKey}… ` : "";
+    return pill(` ${this.modal.label} ${pending}`);
   }
 
   private statusContext(): string {
@@ -1725,7 +1738,7 @@ export class App {
     }
     const hints: Hint[] = line
       ? [["⏎", line.kind === "command" ? "run" : "search"], ["Esc", "cancel"]]
-      : (this.screen === "connections" ? connectionHints : this.focus === "editor" && this.helix.mode === "insert" ? insertHints : workspaceHints).filter(([k]) => k !== "␣" || opensMenu(this.keyContext()));
+      : (this.screen === "connections" ? connectionHints : this.focus === "editor" && this.modal.mode === "insert" ? insertHints : workspaceHints).filter(([k]) => k !== "␣" || opensMenu(this.keyContext()));
     let right = [...hintLine(hints), " "];
     while (hints.length > 0 && lineWidth(left) + lineWidth(right) + 2 > this.renderer.width) {
       hints.pop();

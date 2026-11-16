@@ -6,6 +6,10 @@ export const environments = ["local", "testing", "production"] as const;
 
 export type Environment = (typeof environments)[number];
 
+export const editorKinds = ["helix", "vi"] as const;
+
+export type EditorKind = (typeof editorKinds)[number];
+
 export type Definition = {
   host: string;
   port?: string;
@@ -22,6 +26,7 @@ export type UserConfig = {
   connections: Map<string, UserConnection>;
   repos: Map<string, Map<string, Grant>>;
   localHosts: string[];
+  editor: EditorKind;
 };
 
 export type UserConnection = { definition: Definition; agent: AgentLevel; agentSet: boolean; environment: Environment; initSql: string | null };
@@ -57,9 +62,10 @@ export function parseUserConfig(text: string, source: string): Parsed<UserConfig
   }
 
   const localHosts = parseLocalHosts(doc.local, `${source}: local`, problems);
+  const editor = parseEditor(doc.editor, `${source}: editor`, problems);
 
-  reportUnknownKeys(doc, ["connections", "repos", "local"], source, problems);
-  return { value: { connections, repos, localHosts }, problems };
+  reportUnknownKeys(doc, ["connections", "repos", "local", "editor"], source, problems);
+  return { value: { connections, repos, localHosts, editor }, problems };
 }
 
 export function parseRepoConfig(text: string, source: string): Parsed<RepoConfig> {
@@ -167,6 +173,13 @@ function parseGrant(value: unknown, where: string, problems: string[]): Grant | 
   }
   problems.push(`${where} should be an agent level or { agent = ..., hosts = [...] }`);
   return null;
+}
+
+function parseEditor(value: unknown, where: string, problems: string[]): EditorKind {
+  if (value === undefined) return "helix";
+  if (typeof value === "string" && (editorKinds as readonly string[]).includes(value)) return value as EditorKind;
+  problems.push(`${where} should be one of ${editorKinds.join(", ")}; using helix`);
+  return "helix";
 }
 
 function parseInitSql(value: unknown, where: string, problems: string[]): string | null {

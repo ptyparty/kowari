@@ -59,6 +59,7 @@ const resolution: Resolution = {
     { ...connection("staging-rds", "testing", "read-only", "user"), target: { kind: "ready", params: { ...params, password: null } } },
   ],
   problems: [],
+  editor: "helix",
 };
 
 async function shoot(s: TestRendererSetup, name: string): Promise<void> {

@@ -1,5 +1,5 @@
 import type { KeyEvent } from "@opentui/core";
-import { findIn, findLastIn } from "./match.ts";
+import { findMatch, keyChar, Undo, type EditorPort, type ModalEditor, type Mode, type Register, type Snapshot } from "./modal.ts";
 import {
   charStart,
   column,
@@ -18,27 +18,9 @@ import {
   type Range,
 } from "./motions.ts";
 
-export type Mode = "normal" | "insert";
-
-export type EditorPort = {
-  text: () => string;
-  cursor: () => number;
-  setCursor: (index: number) => void;
-  showSelection: (start: number, endExclusive: number) => void;
-  clearSelection: () => void;
-  replace: (start: number, end: number, insert: string) => void;
-  restore: (text: string) => void;
-  measure: (text: string) => number;
-  modeChanged: (mode: Mode) => void;
-};
-
 type Pending = "g" | "f" | "F" | "t" | "T" | null;
 
-type Snapshot = { text: string; head: number };
-
-const historyLimit = 200;
-
-export class Helix {
+export class Helix implements ModalEditor {
   mode: Mode = "normal";
   private anchor = 0;
   private head = 0;
@@ -46,9 +28,8 @@ export class Helix {
   private linewise = false;
   private pending: Pending = null;
   private goal: number | null = null;
-  private register: { text: string; linewise: boolean } | null = null;
-  private undoStack: Snapshot[] = [];
-  private redoStack: Snapshot[] = [];
+  private register: Register | null = null;
+  private readonly undo = new Undo();
   private insertSnapshot: Snapshot | null = null;
   private lastSearch = "";
 
@@ -62,8 +43,8 @@ export class Helix {
     return this.pending;
   }
 
-  get extending(): boolean {
-    return this.extend;
+  get label(): string {
+    return this.mode === "insert" ? "INS" : this.extend ? "EXT" : "NOR";
   }
 
   reset(): void {
@@ -99,19 +80,15 @@ export class Helix {
     if (query === "") return false;
     this.lastSearch = query;
     const text = this.port.text();
-    const found = backward
-      ? (() => {
-          const before = findLastIn(text, query, this.start);
-          return before >= 0 ? before : findLastIn(text, query, text.length + 1);
-        })()
-      : (() => {
-          const after = findIn(text, query, this.start + 1);
-          return after >= 0 ? after : findIn(text, query);
-        })();
+    const found = findMatch(text, query, this.start, backward);
     if (found < 0) return false;
     this.extend = false;
     this.select({ anchor: found, head: prevChar(text, found + query.length) });
     return true;
+  }
+
+  claims(_key: KeyEvent): boolean {
+    return false;
   }
 
   handle(key: KeyEvent): boolean {
@@ -214,9 +191,9 @@ export class Helix {
         this.search(this.lastSearch, true);
         return;
       case "u":
-        return this.travel(this.undoStack, this.redoStack);
+        return this.travel(this.undo.undo(this.snapshot()));
       case "U":
-        return this.travel(this.redoStack, this.undoStack);
+        return this.travel(this.undo.redo(this.snapshot()));
       default:
         return;
     }
@@ -272,19 +249,15 @@ export class Helix {
   }
 
   private checkpoint(text = this.port.text()): void {
-    this.push(this.undoStack, { text, head: this.head });
-    this.redoStack = [];
+    this.undo.checkpoint({ text, head: this.head });
   }
 
-  private push(stack: Snapshot[], snapshot: Snapshot): void {
-    stack.push(snapshot);
-    if (stack.length > historyLimit) stack.shift();
+  private snapshot(): Snapshot {
+    return { text: this.port.text(), head: this.head };
   }
 
-  private travel(from: Snapshot[], to: Snapshot[]): void {
-    const snapshot = from.pop();
+  private travel(snapshot: Snapshot | null): void {
     if (!snapshot) return;
-    this.push(to, { text: this.port.text(), head: this.head });
     this.port.restore(snapshot.text);
     this.extend = false;
     this.collapseTo(snapshot.head);
@@ -349,10 +322,7 @@ export class Helix {
   private toNormal(): void {
     const cursor = this.port.cursor();
     const text = this.port.text();
-    if (this.insertSnapshot && this.insertSnapshot.text !== text) {
-      this.push(this.undoStack, this.insertSnapshot);
-      this.redoStack = [];
-    }
+    if (this.insertSnapshot && this.insertSnapshot.text !== text) this.undo.checkpoint(this.insertSnapshot);
     this.insertSnapshot = null;
     this.mode = "normal";
     this.collapseTo(cursor > lineStart(text, cursor) ? prevChar(text, cursor) : cursor);
@@ -376,11 +346,4 @@ export class Helix {
   private clamp(index: number, text = this.port.text()): number {
     return charStart(text, Math.max(0, Math.min(index, Math.max(0, text.length - 1))));
   }
-}
-
-function keyChar(key: KeyEvent): string | null {
-  const seq = key.sequence;
-  if (seq && seq.length === 1 && seq >= " ") return seq;
-  if (key.name.length === 1) return key.shift ? key.name.toUpperCase() : key.name;
-  return null;
 }

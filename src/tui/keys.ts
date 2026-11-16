@@ -1,3 +1,4 @@
+import type { EditorKind } from "../connections/config.ts";
 import type { KeyCommand, KeyGroup } from "../context.ts";
 
 export type KeyContext =
@@ -27,6 +28,7 @@ export type Binding = {
   send?: string;
   when: KeyContext[];
   menu?: { letter: string; action: MenuAction };
+  editor?: EditorKind;
 };
 
 
@@ -54,7 +56,8 @@ export const bindings: Binding[] = [
   { group: "Workspace", label: "run statement under the cursor", keys: "F5  ^⏎", send: `${esc}[15~`, when: [...workspace, "completion"] },
   { group: "Workspace", label: "next pane", keys: "Tab", send: "\t", when: workspace },
   { group: "Workspace", label: "previous pane", keys: "⇧Tab", send: `${esc}[Z`, when: workspace },
-  { group: "Workspace", label: "query history", keys: "^r", send: "\u0012", when: [...workspace, "completion"] },
+  { group: "Workspace", label: "query history", keys: "^r", send: "\u0012", when: [...workspace, "completion"], editor: "helix" },
+  { group: "Workspace", label: "query history", keys: "^r", send: "\u0012", when: ["insert", "tables", "results", "grid", "detail", "completion"], editor: "vi" },
   { group: "Workspace", label: "connections", keys: "^o", send: "\u000f", when: [...workspace, "completion"] },
   { group: "Workspace", label: "cancel the running statement", keys: "^c", send: "\u0003", when: [...workspace, "completion"] },
   { group: "Workspace", label: "quit", keys: "^q", send: "\u0011", when: [...workspace, "completion", "connections"] },
@@ -74,21 +77,40 @@ export const bindings: Binding[] = [
   { group: "Move", label: "left, down, up, right", keys: "h j k l", when: ["normal"] },
   { group: "Move", label: "next word, word end, previous word", keys: "w e b", when: ["normal"] },
   { group: "Move", label: "first line", keys: "gg", send: "gg", when: ["normal"] },
-  { group: "Move", label: "last line", keys: "ge", send: "ge", when: ["normal"] },
-  { group: "Move", label: "line start, first non-blank, line end", keys: "gh gs gl", when: ["normal"] },
+  { group: "Move", label: "last line", keys: "ge", send: "ge", when: ["normal"], editor: "helix" },
+  { group: "Move", label: "line start, first non-blank, line end", keys: "gh gs gl", when: ["normal"], editor: "helix" },
   { group: "Move", label: "to or till a character", keys: "f t F T", when: ["normal"] },
   { group: "Move", label: "search the SQL", keys: "/", send: "/", when: ["normal"] },
   { group: "Move", label: "next, previous match", keys: "n N", when: ["normal"] },
-  { group: "Select", label: "extend selections", keys: "v", send: "v", when: ["normal"] },
-  { group: "Select", label: "select line, then the next", keys: "x", send: "x", when: ["normal"] },
-  { group: "Select", label: "select everything", keys: "%", send: "%", when: ["normal"] },
-  { group: "Select", label: "collapse the selection", keys: ";", send: ";", when: ["normal"] },
+  { group: "Select", label: "extend selections", keys: "v", send: "v", when: ["normal"], editor: "helix" },
+  { group: "Select", label: "select line, then the next", keys: "x", send: "x", when: ["normal"], editor: "helix" },
+  { group: "Select", label: "select everything", keys: "%", send: "%", when: ["normal"], editor: "helix" },
+  { group: "Select", label: "collapse the selection", keys: ";", send: ";", when: ["normal"], editor: "helix" },
   { group: "Edit", label: "insert before, after", keys: "i a", when: ["normal"] },
   { group: "Edit", label: "insert at line start, end", keys: "I A", when: ["normal"] },
   { group: "Edit", label: "open a line below, above", keys: "o O", when: ["normal"] },
-  { group: "Edit", label: "delete, change", keys: "d c", when: ["normal"] },
-  { group: "Edit", label: "yank, paste after, before", keys: "y p P", when: ["normal"] },
-  { group: "Edit", label: "undo, redo", keys: "u U", when: ["normal"] },
+  { group: "Edit", label: "delete, change", keys: "d c", when: ["normal"], editor: "helix" },
+  { group: "Edit", label: "yank, paste after, before", keys: "y p P", when: ["normal"], editor: "helix" },
+  { group: "Edit", label: "undo, redo", keys: "u U", when: ["normal"], editor: "helix" },
+  { group: "Move", label: "line start, first non-blank, end", keys: "0 ^ $", when: ["normal"], editor: "vi" },
+  { group: "Move", label: "last line, or line n with a count", keys: "G", send: "G", when: ["normal"], editor: "vi" },
+  { group: "Move", label: "next, previous WORD, WORD end", keys: "W B E", when: ["normal"], editor: "vi" },
+  { group: "Move", label: "repeat the find, backwards", keys: "; ,", when: ["normal"], editor: "vi" },
+  { group: "Move", label: "matching bracket", keys: "%", send: "%", when: ["normal"], editor: "vi" },
+  { group: "Move", label: "repeat a motion or edit n times", keys: "2w 3dd", when: ["normal"], editor: "vi" },
+  { group: "Select", label: "select characters, lines", keys: "v V", when: ["normal"], editor: "vi" },
+  { group: "Select", label: "other end of the selection", keys: "o", when: ["normal"], editor: "vi" },
+  { group: "Edit", label: "delete, change, yank + motion", keys: "d c y", when: ["normal"], editor: "vi" },
+  { group: "Edit", label: "the whole line", keys: "dd cc yy", when: ["normal"], editor: "vi" },
+  { group: "Edit", label: "inside, around a word", keys: "iw aw", when: ["normal"], editor: "vi" },
+  { group: "Edit", label: "inside, around ( [ { ' \"", keys: "i( a'", when: ["normal"], editor: "vi" },
+  { group: "Edit", label: "delete a character, before", keys: "x X", when: ["normal"], editor: "vi" },
+  { group: "Edit", label: "delete, change to line end", keys: "D C", when: ["normal"], editor: "vi" },
+  { group: "Edit", label: "substitute character, line", keys: "s S", when: ["normal"], editor: "vi" },
+  { group: "Edit", label: "replace a character, replace mode", keys: "r R", when: ["normal"], editor: "vi" },
+  { group: "Edit", label: "join lines, toggle case", keys: "J ~", when: ["normal"], editor: "vi" },
+  { group: "Edit", label: "paste after, before", keys: "p P", when: ["normal"], editor: "vi" },
+  { group: "Edit", label: "undo, redo", keys: "u ^r", when: ["normal"], editor: "vi" },
   { group: "Edit", label: "command line", keys: ":", send: ":", when: ["normal"] },
   { group: "Edit", label: "quit", keys: ":q", send: ":q\r", when: ["normal"] },
   { group: "Insert", label: "back to normal mode", keys: "Esc", send: esc, when: ["insert"] },
@@ -160,11 +182,11 @@ export function helpContexts(from: KeyContext): KeyContext[] {
   }
 }
 
-export function groupsFor(contexts: KeyContext[]): KeyGroup[] {
+export function groupsFor(contexts: KeyContext[], editor: EditorKind): KeyGroup[] {
   const groups = new Map<string, KeyCommand[]>();
   const seen = new Set<string>();
   for (const b of bindings) {
-    if (!b.when.some((c) => contexts.includes(c))) continue;
+    if (!b.when.some((c) => contexts.includes(c)) || (b.editor && b.editor !== editor)) continue;
     const id = `${b.group}\u0000${b.label}\u0000${b.keys}`;
     if (seen.has(id)) continue;
     seen.add(id);

@@ -63,12 +63,13 @@ function connection(name: string, environment: ResolvedConnection["environment"]
   };
 }
 
-async function open(connections: ResolvedConnection[], claudeSettings = path.join(scratch, "settings-ok.json")): Promise<TestRendererSetup> {
+async function open(connections: ResolvedConnection[], claudeSettings = path.join(scratch, "settings-ok.json"), editor: Resolution["editor"] = "helix"): Promise<TestRendererSetup> {
   setup = await createTestRenderer({ width: 110, height: 24, kittyKeyboard: true });
   const resolution: Resolution = {
     worktree: { root: "/work/app", identity: "github.com/example/app", identityFromRemote: true, composeServices: new Set() },
     connections,
     problems: [],
+    editor,
   };
   copies = [];
   historyFile = path.join(scratch, `history-${++opened}.jsonl`);
@@ -365,6 +366,48 @@ describe("kowari TUI", () => {
 
     s.mockInput.pressKey("u");
     await until(s, () => app!.text.includes("wide"));
+  });
+
+  test("vi: with editor = vi, normal mode edits by operator and motion, and ^r redoes there but finds history in insert mode", async () => {
+    const s = await open([connection("local", "local")], undefined, "vi");
+    await connectFirst(s);
+    await s.mockInput.typeText("select id from shipment");
+    s.mockInput.pressEscape();
+    await until(s, (f) => f.includes(" NOR "));
+    await s.mockInput.typeText("0wcw");
+    await until(s, (f) => f.includes(" INS "));
+    await s.mockInput.typeText("status");
+    s.mockInput.pressEscape();
+    await until(s, () => app!.text === "select status from shipment");
+    s.mockInput.pressKey("u");
+    await until(s, () => app!.text === "select id from shipment");
+    s.mockInput.pressKey("r", { ctrl: true });
+    await until(s, () => app!.text === "select status from shipment");
+    expect(s.captureCharFrame()).not.toContain("History");
+
+    await s.mockInput.typeText("vb");
+    await until(s, (f) => f.includes(" VIS "));
+    s.mockInput.pressEscape();
+    await s.mockInput.typeText("d2");
+    await until(s, (f) => f.includes(" NOR d2… "));
+    s.mockInput.pressEscape();
+
+    s.mockInput.pressKey("A");
+    await until(s, (f) => f.includes(" INS "));
+    s.mockInput.pressKey("r", { ctrl: true });
+    await until(s, (f) => f.includes("History"));
+    s.mockInput.pressEscape();
+
+    s.mockInput.pressEscape();
+    s.mockInput.pressKey(" ");
+    s.mockInput.pressKey("?");
+    const frame = await until(s, (f) => f.includes("Keys") && f.includes("SQL editor"));
+    expect(frame).not.toContain("extend selections");
+    s.mockInput.pressEscape();
+    await until(s, (f) => !f.includes("Keys"));
+    const labels = app!.keys().flatMap((g) => g.commands.map((c) => `${c.keys} ${c.label}`));
+    expect(labels).toContain("u ^r undo, redo");
+    expect(labels).not.toContain("^r query history");
   });
 
   test("helix: one Esc closes the completion popup and leaves insert mode", async () => {

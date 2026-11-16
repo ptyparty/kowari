@@ -200,6 +200,14 @@ local-ro = "read-only"
     ]);
   });
 
+  test("editor picks the TUI's keys: helix unless your config says vi", async () => {
+    const dir = await repo("editors", "git@github.com:exfresso/editors.git", {});
+    expect((await resolve(dir, "")).editor).toBe("helix");
+    expect((await resolve(dir, `editor = "vi"\n`)).editor).toBe("vi");
+    const typo = await resolve(dir, `editor = "emacs"\n`);
+    expect([typo.editor, typo.problems]).toEqual(["helix", [`${userConfigPath}: editor should be one of helix, vi; using helix`]]);
+  });
+
   test("init_sql comes from your config only", async () => {
     const dir = await repo("initsql", "git@github.com:exfresso/initsql.git", {
       ".kowari.toml": `[connections.local]\nhost = "localhost"\ninit_sql = "set role postgres"\n`,
