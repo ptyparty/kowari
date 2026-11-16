@@ -14,10 +14,11 @@ export type KeyContext =
   | "menu"
   | "help"
   | "finder"
+  | "history"
   | "command"
   | "search";
 
-export type MenuAction = "find" | "connections" | "run" | "detail" | "copyCell" | "copyRow" | "help" | "quit";
+export type MenuAction = "find" | "history" | "connections" | "run" | "detail" | "copyCell" | "copyRow" | "help" | "quit";
 
 export type Binding = {
   group: string;
@@ -41,6 +42,7 @@ function menu(letter: string, label: string, action: MenuAction, when: KeyContex
 export const bindings: Binding[] = [
   { group: "Menu", label: "open the menu", keys: "␣", send: " ", when: menuFrom },
   menu("f", "find table", "find", panes),
+  menu("h", "query history", "history", panes),
   menu("r", "run statement", "run", panes),
   menu("d", "open the cell", "detail", ["grid"]),
   menu("y", "copy cell", "copyCell", ["grid"]),
@@ -52,6 +54,7 @@ export const bindings: Binding[] = [
   { group: "Workspace", label: "run statement under the cursor", keys: "F5  ^⏎", send: `${esc}[15~`, when: [...workspace, "completion"] },
   { group: "Workspace", label: "next pane", keys: "Tab", send: "\t", when: workspace },
   { group: "Workspace", label: "previous pane", keys: "⇧Tab", send: `${esc}[Z`, when: workspace },
+  { group: "Workspace", label: "query history", keys: "^r", send: "\u0012", when: [...workspace, "completion"] },
   { group: "Workspace", label: "connections", keys: "^o", send: "\u000f", when: [...workspace, "completion"] },
   { group: "Workspace", label: "cancel the running statement", keys: "^c", send: "\u0003", when: [...workspace, "completion"] },
   { group: "Workspace", label: "quit", keys: "^q", send: "\u0011", when: [...workspace, "completion", "connections"] },
@@ -114,6 +117,11 @@ export const bindings: Binding[] = [
   { group: "Find table", label: "choose", keys: "↑↓  ^n ^p", when: ["finder"] },
   { group: "Find table", label: "select its first 100 rows", keys: "⏎", send: "\r", when: ["finder"] },
   { group: "Find table", label: "close", keys: "Esc", send: esc, when: ["finder"] },
+  { group: "History", label: "type words to find", keys: "abc", when: ["history"] },
+  { group: "History", label: "choose", keys: "↑↓  ^n ^p", when: ["history"] },
+  { group: "History", label: "older", keys: "^r", send: "\u0012", when: ["history"] },
+  { group: "History", label: "put it in the editor", keys: "⏎", send: "\r", when: ["history"] },
+  { group: "History", label: "close", keys: "Esc", send: esc, when: ["history"] },
   { group: "Command line", label: "quit", keys: ":q", send: "q\r", when: ["command"] },
   { group: "Command line", label: "help", keys: ":help", send: "help\r", when: ["command"] },
   { group: "Command line", label: "run it", keys: "⏎", send: "\r", when: ["command"] },
@@ -142,7 +150,7 @@ export function helpContexts(from: KeyContext): KeyContext[] {
     case "normal":
     case "insert":
     case "completion":
-      return ["normal", "insert", "completion", "command"];
+      return ["normal", "insert", "completion", "command", "history"];
     case "tables":
       return ["tables", "finder"];
     case "grid":

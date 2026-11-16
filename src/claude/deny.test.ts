@@ -18,10 +18,11 @@ afterAll(async () => {
 
 describe("deny rules", () => {
   test("keep Claude from reading or editing kowari's config, written relative to home when it lives there", () => {
-    const repo = ["Read(**/.kowari.toml)", "Edit(**/.kowari.toml)"];
+    const repo = ["Read(**/.kowari.toml)", "Edit(**/.kowari.toml)", "Read(~/.local/state/kowari/**)", "Edit(~/.local/state/kowari/**)"];
     expect(configDenyRules({ HOME: "/home/u" })).toEqual(["Read(~/.config/kowari/**)", "Edit(~/.config/kowari/**)", ...repo]);
     expect(configDenyRules({ HOME: "/home/u", XDG_CONFIG_HOME: "/home/u/cfg" })).toEqual(["Read(~/cfg/kowari/**)", "Edit(~/cfg/kowari/**)", ...repo]);
     expect(configDenyRules({ HOME: "/home/u", XDG_CONFIG_HOME: "/etc/xdg" })).toEqual(["Read(//etc/xdg/kowari/**)", "Edit(//etc/xdg/kowari/**)", ...repo]);
+    expect(configDenyRules({ HOME: "/home/u", XDG_STATE_HOME: "/var/st" }).slice(-2)).toEqual(["Read(//var/st/kowari/**)", "Edit(//var/st/kowari/**)"]);
   });
 
   test("a missing settings file lacks every rule, and adding creates it", async () => {

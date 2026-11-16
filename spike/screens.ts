@@ -1,4 +1,6 @@
 import { createTestRenderer, type TestRendererSetup } from "@opentui/core/testing";
+import { mkdtemp, rm } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import type { Resolution, ResolvedConnection } from "../src/connections/resolve.ts";
 import { memoryKeyring } from "../src/connections/keyring.ts";
@@ -12,6 +14,7 @@ const outDir = process.argv[2] ?? "";
 if (outDir === "") throw new Error("usage: bun spike/screens.ts <output dir>");
 
 await ready;
+const scratch = await mkdtemp(path.join(os.tmpdir(), "kowari-screens-"));
 const fixture = await makeFixture();
 const db = await fixture.freshDatabase();
 await db.admin.unsafe(`
@@ -67,7 +70,7 @@ async function shoot(s: TestRendererSetup, name: string): Promise<void> {
 
 async function session(pick: number, run: (s: TestRendererSetup) => Promise<void>): Promise<void> {
   const s = await createTestRenderer({ width: 120, height: 32, kittyKeyboard: true });
-  const app = new App(s.renderer, { resolve: async () => resolution, onQuit: () => {}, keyring: memoryKeyring(), claudeSettings: "/nonexistent/kowari-screens/settings.json" });
+  const app = new App(s.renderer, { resolve: async () => resolution, onQuit: () => {}, keyring: memoryKeyring(), claudeSettings: "/nonexistent/kowari-screens/settings.json", history: path.join(scratch, "history.jsonl") });
   await app.start();
   await until(s, (f) => f.includes("DETAILS"));
   for (let i = 0; i < pick; i++) s.mockInput.pressArrow("down");
@@ -199,4 +202,5 @@ try {
   });
 } finally {
   await fixture.teardown();
+  await rm(scratch, { recursive: true, force: true });
 }

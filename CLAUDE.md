@@ -14,12 +14,12 @@ Default to using Bun instead of Node.js.
 - `src/agent/ask-access.ts`: when Claude asks for an ungranted local connection inside komux, asks you in a `komux ask` form what Claude may do, leaving read-only out when the role check would refuse it; `src/connections/record.ts` writes the answer into your config when you tick "record it".
 - `src/agent/session.ts`: opens a connection for Claude according to its agent level; `catalog.ts` has the table listing and description queries.
 - `src/sql/`: Postgres's scanner (from libpg-query) as tokens with character offsets, statement splitting on the semicolons it sees, the catalog read on connect, and completion (`complete.ts`, a pure function of text, cursor and catalog).
-- `src/tui/`: the TUI (`kowari` with no arguments): connection screen, workspace, result grid, the human's database session.
+- `src/tui/`: the TUI (`kowari` with no arguments): connection screen, workspace, result grid, the human's database session. `history.ts` keeps the statements you run there, never Claude's.
 - `src/format.ts`: text and JSON output for results.
 - `src/context.ts`: the socket komux asks for context on Alt shift c, copied from quoll; `src/tui/context.ts` builds what the TUI attaches, which never includes a value from the results.
 - `src/tui/keys.ts`: every TUI key in one table, read by the Space menu, the help sheet, and the answer to komux's `{"keys":1}` question on the context socket; keep it in step when a key changes.
 - `src/connections/keyring.ts`: passwords in the system keyring (`Bun.secrets`), with a D-Bus lock check so kowari never sets off an unlock prompt; `memoryKeyring` for tests.
-- `src/claude/deny.ts`: checks and adds the Claude Code deny rules that keep keyring tools away from Claude and stop it reading or editing kowari's config files.
+- `src/claude/deny.ts`: checks and adds the Claude Code deny rules that keep keyring tools away from Claude and stop it reading or editing kowari's config files and query history.
 - `src/claude/setup.ts`: `kowari setup`, which links the skill into Claude Code's config and adds the deny rules; `links.ts` is copied from komux.
 - `src/connections/`: resolves the connection list for a worktree from your config, the repo's `.kowari.toml`, and the worktree's `.env`, including what Claude may do with each. A connection's `init_sql` comes only from your config and runs only in the TUI's `Database.open`, never in Claude's sessions.
 - `src/replace-file.ts`: replaces a config file through a temp file and a rename, following symlinks and keeping its mode.
@@ -37,4 +37,4 @@ Default to using Bun instead of Node.js.
 - The editor's highlight offsets do not count newlines; `App.highlight` converts the scanner's offsets.
 - The editor's cursor and `setCursor` columns are display cells (tabs and wide characters count more than one); `App.cursorIndex` and `App.position` convert to and from string indexes.
 - CLI tests clear `KOMUX_SOCKET` so an ungranted connection never pops a real komux form; the ask tests put a fake `komux` on `PATH` that saves the form and prints a canned answer.
-- Tests never touch the real keyring or `~/.claude/settings.json`: pass `memoryKeyring()` and a scratch `claudeSettings` path to `App`, and a keyring to `openAgentSession`.
+- Tests never touch the real keyring or `~/.claude/settings.json`: pass `memoryKeyring()`, a scratch `claudeSettings` path and a scratch `history` file to `App`, and a keyring to `openAgentSession`.

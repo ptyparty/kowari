@@ -29,6 +29,7 @@ import type { Attachment, KeyGroup } from "../context.ts";
 import { kowariContext } from "./context.ts";
 import { Database, type Run } from "./database.ts";
 import { Helix, type Mode } from "./helix.ts";
+import { defaultHistoryPath, loadHistory, oneLine, recordHistory, searchHistory, type HistoryEntry } from "./history.ts";
 import { clamp, layoutGrid, lineWidth, moveCursor, paint, searchCells, type CellAt, type GridCursor, type Line, type Rows } from "./grid.ts";
 import { groupsFor, helpContexts, menuAction, opensMenu, menuEntries, menuGroups, type KeyContext, type MenuAction } from "./keys.ts";
 import { fuzzyFilter } from "./match.ts";
@@ -42,6 +43,7 @@ export type AppOptions = {
   open?: (params: ConnectionParams, initSql: string | null) => Promise<Database>;
   keyring?: Keyring;
   claudeSettings?: string;
+  history?: string;
   setTitle?: (title: string) => void;
   copy?: (text: string) => boolean;
   onQuit: () => void;
@@ -73,6 +75,7 @@ type Overlay =
   | { kind: "menu"; from: KeyContext }
   | { kind: "help"; from: KeyContext; top: number }
   | { kind: "finder"; query: string; index: number }
+  | { kind: "history"; query: string; index: number; entries: HistoryEntry[] }
   | { kind: "command"; text: string }
   | { kind: "search"; target: "grid" | "editor"; text: string; origin: GridCursor };
 
@@ -427,7 +430,7 @@ export class App {
     if (this.overlay) {
       event.preventDefault();
       const pasted = new TextDecoder().decode(event.bytes).split(/[\r\n]/)[0] ?? "";
-      if (this.overlay.kind === "finder") {
+      if (this.overlay.kind === "finder" || this.overlay.kind === "history") {
         this.overlay.query += pasted;
         this.overlay.index = 0;
         this.renderSheet();
@@ -472,6 +475,11 @@ export class App {
     if (key.ctrl && key.name === "o") {
       key.preventDefault();
       this.showScreen("connections");
+      return;
+    }
+    if (key.ctrl && key.name === "r") {
+      key.preventDefault();
+      void this.openHistory();
       return;
     }
     if (this.focus === "editor" && this.completionKey(key)) {
@@ -540,6 +548,8 @@ export class App {
         return this.renderSheet();
       case "finder":
         return this.finderKey(key, overlay);
+      case "history":
+        return this.historyKey(key, overlay);
       case "command":
       case "search":
         return this.promptLineKey(key, overlay);
@@ -557,6 +567,8 @@ export class App {
     switch (action) {
       case "find":
         return this.openOverlay({ kind: "finder", query: "", index: 0 });
+      case "history":
+        return void this.openHistory();
       case "connections":
         return this.showScreen("connections");
       case "run":
@@ -596,6 +608,56 @@ export class App {
       finder.index = 0;
     }
     this.renderSheet();
+  }
+
+  private async openHistory(): Promise<void> {
+    let entries: HistoryEntry[];
+    try {
+      entries = await loadHistory(this.historyPath);
+    } catch (e) {
+      this.say(`could not read the history: ${e instanceof Error ? e.message : String(e)}`, "error");
+      return;
+    }
+    if (this.screen !== "workspace" || this.overlay) return;
+    this.openOverlay({ kind: "history", query: "", index: 0, entries });
+  }
+
+  private historyKey(key: KeyEvent, history: Extract<Overlay, { kind: "history" }>): void {
+    const found = this.foundHistory(history);
+    if (key.name === "escape") return this.closeOverlay();
+    if (key.name === "return") {
+      const entry = found[history.index];
+      this.closeOverlay();
+      if (entry) this.replaceText(entry.sql);
+      return;
+    }
+    if (key.name === "up" || (key.ctrl && key.name === "p")) history.index = Math.max(0, history.index - 1);
+    else if (key.name === "down" || (key.ctrl && (key.name === "n" || key.name === "r"))) history.index = Math.min(Math.max(0, found.length - 1), history.index + 1);
+    else if (key.name === "backspace") {
+      history.query = [...history.query].slice(0, -1).join("");
+      history.index = 0;
+    } else {
+      const char = printable(key);
+      if (char === null) return;
+      history.query += char;
+      history.index = 0;
+    }
+    this.renderSheet();
+  }
+
+  private foundHistory(history: Extract<Overlay, { kind: "history" }>): HistoryEntry[] {
+    return searchHistory(history.entries, history.query, this.connected?.connection.name ?? null);
+  }
+
+  private replaceText(text: string): void {
+    this.helix.beforeExternalChange();
+    this.setText(text);
+    this.focus = "editor";
+    this.renderAll();
+  }
+
+  private get historyPath(): string {
+    return this.options.history ?? defaultHistoryPath();
   }
 
   private foundTables(query: string): TableRef[] {
@@ -1198,7 +1260,7 @@ export class App {
     }
 
     this.say("running…", "info");
-    const db = this.connected.db;
+    const { db, connection } = this.connected;
     this.userRunning = true;
     this.renderEditorTitle();
     const sql = statementText(text, span);
@@ -1212,6 +1274,9 @@ export class App {
       this.userRunning = false;
       this.renderEditorTitle();
     }
+    recordHistory(this.historyPath, { sql, at: Date.now(), connection: connection.name }).catch((e) =>
+      this.say(`the query was not saved to the history: ${e instanceof Error ? e.message : String(e)}`, "error"),
+    );
     if (this.connected?.db !== db) return;
     this.run = run;
     this.runSql = sql;
@@ -1377,7 +1442,8 @@ export class App {
     const denies = this.denies!;
     return styled(
       joinLines(this.card(theme.warning, [
-        [bold(fg(theme.warning)("Keep Claude Code out of your keyring and kowari's config"))],
+        [bold(fg(theme.warning)("Keep Claude Code out of your keyring and kowari's files"))],
+        hintLine([["y", "adds them"], ["any other key", "cancels"]]),
         [],
         [fg(theme.text)(`Add these to permissions.deny in ${denies.settingsPath}:`)],
         [],
@@ -1386,8 +1452,6 @@ export class App {
         [fg(theme.muted)("The rest of the file is kept, rewritten as formatted JSON.")],
         [fg(theme.muted)("They stop keyring tools and Claude Code's file tools, not a")],
         [fg(theme.muted)("shell command Claude writes; the Bash sandbox, where on, does.")],
-        [],
-        hintLine([["y", "adds them"], ["any other key", "cancels"]]),
       ])),
     );
   }
@@ -1442,7 +1506,14 @@ export class App {
       this.sheetBox.visible = false;
       return;
     }
-    const lines = overlay.kind === "menu" ? this.menuLines(overlay.from) : overlay.kind === "help" ? this.helpLines(overlay) : this.finderLines(overlay);
+    const lines =
+      overlay.kind === "menu"
+        ? this.menuLines(overlay.from)
+        : overlay.kind === "help"
+          ? this.helpLines(overlay)
+          : overlay.kind === "history"
+            ? this.historyLines(overlay)
+            : this.finderLines(overlay);
     const width = Math.min(this.renderer.width, Math.max(...lines.map(lineWidth)) + 4);
     const card = raised(theme.accent, lines, width);
     const room = Math.max(3, this.renderer.height - 2);
@@ -1455,7 +1526,7 @@ export class App {
       this.sheetBox.top = Math.max(1, this.renderer.height - 1 - height);
     } else {
       this.sheetBox.left = Math.max(0, Math.floor((this.renderer.width - width) / 2));
-      this.sheetBox.top = overlay.kind === "finder" ? Math.min(3, Math.max(1, this.renderer.height - 1 - height)) : Math.max(1, Math.floor((this.renderer.height - height) / 2));
+      this.sheetBox.top = overlay.kind === "finder" || overlay.kind === "history" ? Math.min(3, Math.max(1, this.renderer.height - 1 - height)) : Math.max(1, Math.floor((this.renderer.height - height) / 2));
     }
     this.sheetBox.visible = true;
   }
@@ -1523,6 +1594,33 @@ export class App {
       ...(rows.length > 0 ? rows : [[fg(theme.muted)("no table matches")]]),
       [],
       [fg(theme.text)("⏎"), fg(theme.muted)(" select * … limit 100  "), fg(theme.text)("Esc"), fg(theme.muted)(" closes")],
+    ];
+  }
+
+  private historyLines(history: Extract<Overlay, { kind: "history" }>): Line[] {
+    const found = this.foundHistory(history);
+    const width = Math.max(28, this.renderer.width - 8);
+    const top = clamp(history.index - Math.floor(finderRows / 2), 0, Math.max(0, found.length - finderRows));
+    const rows = found.slice(top, top + finderRows).map((entry, i): Line => {
+      const selected = top + i === history.index;
+      const tag = ` ${entry.connection}`;
+      const room = width - 2 - tag.length;
+      const sql = oneLine(entry.sql);
+      const line: Line = [
+        selected ? fg(theme.accent)("▸ ") : "  ",
+        fg(theme.text)(sql.length > room ? `${sql.slice(0, room - 1)}…` : sql.padEnd(room)),
+        fg(theme.muted)(tag),
+      ];
+      return selected ? paint(line, width, theme.selection) : paint(line, width, null);
+    });
+    return [
+      [bold(fg(theme.text)("History")), fg(theme.muted)(`  ${found.length} of ${history.entries.length}`)],
+      [],
+      [bg(theme.background)(fg(theme.text)(` ${history.query}`)), bg(theme.accent)(" "), bg(theme.background)(" ".repeat(Math.max(0, width - 2 - Bun.stringWidth(history.query))))],
+      [],
+      ...(rows.length > 0 ? rows : [[fg(theme.muted)(history.entries.length === 0 ? "no queries run yet" : "no query matches")]]),
+      [],
+      [fg(theme.text)("⏎"), fg(theme.muted)(" puts it in the editor  "), fg(theme.text)("Esc"), fg(theme.muted)(" closes")],
     ];
   }
 

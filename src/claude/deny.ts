@@ -2,6 +2,7 @@ import os from "node:os";
 import path from "node:path";
 import { defaultUserConfigPath, repoConfigFile } from "../connections/resolve.ts";
 import { replaceFile } from "../replace-file.ts";
+import { defaultHistoryPath } from "../tui/history.ts";
 
 export const keyringDenyRules = [
   "Bash(secret-tool *)",
@@ -13,9 +14,14 @@ export const keyringDenyRules = [
 export function configDenyRules(env: Record<string, string | undefined> = process.env): string[] {
   const home = env.HOME || os.homedir();
   const dir = path.dirname(defaultUserConfigPath({ ...env, XDG_CONFIG_HOME: env.XDG_CONFIG_HOME || path.join(home, ".config") }));
+  const user = homeRelative(home, dir);
+  const state = homeRelative(home, path.dirname(defaultHistoryPath({ ...env, XDG_STATE_HOME: env.XDG_STATE_HOME || path.join(home, ".local", "state") })));
+  return [`Read(${user}/**)`, `Edit(${user}/**)`, `Read(**/${repoConfigFile})`, `Edit(**/${repoConfigFile})`, `Read(${state}/**)`, `Edit(${state}/**)`];
+}
+
+function homeRelative(home: string, dir: string): string {
   const inside = path.relative(home, dir);
-  const user = inside && !inside.startsWith("..") && !path.isAbsolute(inside) ? `~/${inside}` : `/${dir}`;
-  return [`Read(${user}/**)`, `Edit(${user}/**)`, `Read(**/${repoConfigFile})`, `Edit(**/${repoConfigFile})`];
+  return inside && !inside.startsWith("..") && !path.isAbsolute(inside) ? `~/${inside}` : `/${dir}`;
 }
 
 export function denyRules(env: Record<string, string | undefined> = process.env): string[] {

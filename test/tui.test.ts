@@ -19,6 +19,8 @@ let quits = 0;
 let scratch: string;
 let keyring = memoryKeyring();
 let copies: string[] = [];
+let historyFile = "";
+let opened = 0;
 
 beforeAll(async () => {
   await ready;
@@ -69,10 +71,20 @@ async function open(connections: ResolvedConnection[], claudeSettings = path.joi
     problems: [],
   };
   copies = [];
-  app = new App(setup.renderer, { resolve: async () => resolution, onQuit: () => (quits += 1), keyring, claudeSettings, copy: (text) => (copies.push(text), true) });
+  historyFile = path.join(scratch, `history-${++opened}.jsonl`);
+  app = new App(setup.renderer, { resolve: async () => resolution, onQuit: () => (quits += 1), keyring, claudeSettings, history: historyFile, copy: (text) => (copies.push(text), true) });
   await app.start();
   await until(setup, (f) => f.includes("CONNECTIONS"));
   return setup;
+}
+
+async function historyLines(count: number): Promise<{ sql: string; connection: string }[]> {
+  for (let i = 0; i < 50; i++) {
+    const lines = (await Bun.file(historyFile).text().catch(() => "")).split("\n").filter((line) => line !== "");
+    if (lines.length === count) return lines.map((line) => JSON.parse(line));
+    await Bun.sleep(20);
+  }
+  throw new Error(`the history never had ${count} entries`);
 }
 
 async function settled(s: TestRendererSetup): Promise<string> {
@@ -159,7 +171,7 @@ describe("kowari TUI", () => {
     const settings = path.join(scratch, "settings-missing.json");
     await Bun.write(settings, JSON.stringify({ model: "opus", permissions: { deny: ["Bash(rm -rf *)"] } }));
     const s = await open([connection("local", "local")], settings);
-    await until(s, (f) => f.includes("8 deny rules are missing"));
+    await until(s, (f) => f.includes("10 deny rules are missing"));
     s.mockInput.pressKey("D", { shift: true });
     await until(s, (f) => f.includes("y adds them"));
     s.mockInput.pressKey("y");
@@ -433,6 +445,33 @@ describe("kowari TUI", () => {
     expect(await until(s, (f) => f.includes("could not connect to broken"))).toContain("init_sql failed");
   });
 
+  test("records each statement run, and ^r finds one and puts it in the editor", async () => {
+    const s = await open([connection("local", "local")]);
+    await connectFirst(s);
+    await Bun.write(historyFile, `${JSON.stringify({ sql: "select 'elsewhere' as other_conn", at: Date.now() + 1000, connection: "staging" })}\n`);
+    await s.mockInput.typeText("select id\nfrom shipment where id = 1");
+    s.mockInput.pressEnter({ ctrl: true });
+    await until(s, (f) => f.includes("1 row"));
+    const recorded = await historyLines(2);
+    expect(recorded.map((e) => [e.sql, e.connection])).toEqual([
+      ["select 'elsewhere' as other_conn", "staging"],
+      ["select id\nfrom shipment where id = 1", "local"],
+    ]);
+
+    s.mockInput.pressKey("r", { ctrl: true });
+    let frame = await until(s, (f) => f.includes("History") && f.includes("2 of 2"));
+    expect(frame.indexOf("select id from shipment where id = 1")).toBeLessThan(frame.indexOf("select 'elsewhere'"));
+    await s.mockInput.typeText("ELSEWHERE other");
+    frame = await until(s, (f) => f.includes("1 of 2"));
+    s.mockInput.pressEnter();
+    frame = await until(s, (f) => !f.includes("History"));
+    expect(app!.text).toBe("select 'elsewhere' as other_conn");
+
+    s.mockInput.pressEscape();
+    s.mockInput.pressKey("u");
+    await until(s, () => app!.text === "select id\nfrom shipment where id = 1");
+  });
+
   test("a production connection says so in the banner", async () => {
     const s = await open([connection("prod", "production")]);
     s.mockInput.pressEnter();
@@ -448,15 +487,15 @@ describe("kowari TUI", () => {
     s.mockInput.pressKey(" ");
     let frame = await until(s, (f) => f.includes("Menu") && f.includes("find table"));
     expect(frame).toContain("connections");
-    expect(app!.keys()[0]!.commands.map((c) => c.send)).toEqual(["f", "r", "c", "?", "q", "\u001b"]);
+    expect(app!.keys()[0]!.commands.map((c) => c.send)).toEqual(["f", "h", "r", "c", "?", "q", "\u001b"]);
     s.mockInput.pressKey("?");
     frame = await until(s, (f) => f.includes("Keys") && f.includes("SQL editor"));
     expect(frame).toContain("Workspace");
-    expect(frame).toContain("Select");
+    expect(frame).toContain("Edit");
     s.mockInput.pressArrow("down");
     s.mockInput.pressKey("\u001b[6~");
     frame = await until(s, (f) => f.includes("Completion"));
-    expect(frame).toContain("Insert");
+    expect(frame).toContain("back to normal mode");
     s.mockInput.pressEscape();
     await until(s, (f) => !f.includes("Completion"));
     expect(app!.text).toBe("");

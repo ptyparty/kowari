@@ -16,7 +16,7 @@ bun link                                       # puts `kowari` on PATH
 kowari setup --yes                             # teaches Claude to use it, and keeps it out of your keyring
 ```
 
-`kowari setup` lists what kowari adds to Claude Code's config and whether each part is there: the skill, which points Claude at `kowari guide`, linked so it follows this checkout as you update it, and the deny rules that keep keyring tools away from Claude and stop it reading or editing `.kowari.toml` or your kowari config, where its access is granted. `--yes` sets up what is missing. `--remove` takes the skill out again but leaves the deny rules, which only protect you.
+`kowari setup` lists what kowari adds to Claude Code's config and whether each part is there: the skill, which points Claude at `kowari guide`, linked so it follows this checkout as you update it, and the deny rules that keep keyring tools away from Claude and stop it reading or editing `.kowari.toml`, your kowari config, where its access is granted, or your query history. `--yes` sets up what is missing. `--remove` takes the skill out again but leaves the deny rules, which only protect you.
 
 ## Use
 
@@ -34,8 +34,10 @@ kowari setup [--yes|--remove]           list, add, or remove kowari's skill and 
 
 Keys: Space opens a menu wherever it isn't text (the editor in normal mode, the tables, the results, the connection screen), and Space ? lists every key for where you are. Space f finds a table by name and selects its first 100 rows; Space c is the connection screen, also on Ctrl-O.
 
+Every statement you run in the TUI goes into a history in `$XDG_STATE_HOME/kowari/history.jsonl` (`~/.local/state/kowari/` by default), readable only by you. Each query is kept once, with the time it last ran and its connection. Ctrl-R, or Space h, searches it. It shows the queries containing every word you type, the current connection's first and then newest first, and Enter puts the one you pick in the editor, replacing what is there (`u` brings it back). Claude's queries through the CLI are never recorded.
+
 - Connection screen: `↑`/`↓` choose · Enter connect · `r` reload.
-- Everywhere in the workspace: Ctrl-Enter or F5 run the statement under the cursor · Tab switch pane · Ctrl-C cancel · Ctrl-Q quit.
+- Everywhere in the workspace: Ctrl-Enter or F5 run the statement under the cursor · Ctrl-R search the history · Tab switch pane · Ctrl-C cancel · Ctrl-Q quit.
 - Editor: helix keys, with Ctrl-Space to complete in insert mode, `/` to search the SQL (`n`/`N` for the next and previous match), and `:` for a command line, where `:q` quits.
 - Results: `hjkl` or arrows move · Enter opens the cell · `/` searches the cells, highlighting the matches (`n`/`N` step through them, Esc clears) · `y` copies the cell and `Y` the row.
 
