@@ -195,6 +195,29 @@ describe("kowari TUI", () => {
     expect(frame).toContain("testing");
   });
 
+  test("/ filters the connection list as you type, fzf-style, and Enter connects to the match", async () => {
+    const s = await open([connection("staging", "testing"), connection("prod-billing", "production"), connection("local", "local")]);
+    s.mockInput.pressKey("/");
+    await until(s, (f) => f.includes(" / ") && f.includes("3 of 3"));
+    expect(app!.keys().map((g) => g.name)).toContain("Filter");
+    await s.mockInput.typeText("pbl");
+    let frame = await until(s, (f) => f.includes("1 of 3"));
+    expect(frame).toContain("prod-billing");
+    expect(frame).not.toContain("staging");
+    await s.mockInput.typeText("z");
+    await until(s, (f) => f.includes("no connection matches"));
+    s.mockInput.pressBackspace();
+    s.mockInput.pressEscape();
+    frame = await until(s, (f) => !f.includes("of 3") && f.includes("staging"));
+    expect(frame).toMatch(/▸\s+prod-billing/);
+
+    s.mockInput.pressKey("/");
+    await s.mockInput.typeText("loc");
+    await until(s, (f) => f.includes("1 of 3"));
+    s.mockInput.pressEnter();
+    await until(s, (f) => f.includes("● LOCAL"));
+  });
+
   test("the connection list keeps its environment and Claude columns in a narrow terminal", async () => {
     const s = await open([connection("a-rather-long-connection-name-for-staging", "testing"), connection("local", "local")]);
     await until(s, (f) => f.includes("DETAILS"));

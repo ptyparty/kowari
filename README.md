@@ -38,7 +38,7 @@ In vi mode, normal mode has motions with counts (`hjkl`, `w b e`, `0 ^ $`, `gg G
 
 Every statement you run in the TUI goes into a history in `$XDG_STATE_HOME/kowari/history.jsonl` (`~/.local/state/kowari/` by default), readable only by you. Each query is kept once, with the time it last ran and its connection. Ctrl-R, or Space h, searches it. It shows the queries containing every word you type, the current connection's first and then newest first, and Enter puts the one you pick in the editor, replacing what is there (`u` brings it back). Claude's queries through the CLI are never recorded.
 
-- Connection screen: `↑`/`↓` choose · Enter connect · `r` reload.
+- Connection screen: `↑`/`↓` choose · Enter connect · `r` reload · `/` filters the list by name as you type, fuzzily like fzf (`↑`/`↓` or Ctrl-N/Ctrl-P choose, Enter connects, Esc clears).
 - Everywhere in the workspace: Ctrl-Enter or F5 run the statement under the cursor · Ctrl-R search the history · Tab switch pane · Ctrl-C cancel · Ctrl-Q quit.
 - Editor: helix keys, or vi keys with `editor = "vi"` at the top of your config, with Ctrl-Space to complete in insert mode, `/` to search the SQL (`n`/`N` for the next and previous match), and `:` for a command line, where `:q` quits.
 - Results: `hjkl` or arrows move · Enter opens the cell · `/` searches the cells, highlighting the matches (`n`/`N` step through them, Esc clears) · `y` copies the cell and `Y` the row.

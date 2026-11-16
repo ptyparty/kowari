@@ -3,6 +3,7 @@ import type { KeyCommand, KeyGroup } from "../context.ts";
 
 export type KeyContext =
   | "connections"
+  | "filter"
   | "password"
   | "confirm"
   | "normal"
@@ -60,14 +61,20 @@ export const bindings: Binding[] = [
   { group: "Workspace", label: "query history", keys: "^r", send: "\u0012", when: ["insert", "tables", "results", "grid", "detail", "completion"], editor: "vi" },
   { group: "Workspace", label: "connections", keys: "^o", send: "\u000f", when: [...workspace, "completion"] },
   { group: "Workspace", label: "cancel the running statement", keys: "^c", send: "\u0003", when: [...workspace, "completion"] },
-  { group: "Workspace", label: "quit", keys: "^q", send: "\u0011", when: [...workspace, "completion", "connections"] },
+  { group: "Workspace", label: "quit", keys: "^q", send: "\u0011", when: [...workspace, "completion", "connections", "filter"] },
 
   { group: "Connections", label: "choose", keys: "↑↓  jk", when: ["connections"] },
   { group: "Connections", label: "connect", keys: "⏎", send: "\r", when: ["connections"] },
+  { group: "Connections", label: "filter by name", keys: "/", send: "/", when: ["connections"] },
   { group: "Connections", label: "reload config", keys: "r", send: "r", when: ["connections"] },
   { group: "Connections", label: "forget the stored password", keys: "f", send: "f", when: ["connections"] },
   { group: "Connections", label: "add Claude Code deny rules", keys: "D", send: "D", when: ["connections"] },
   { group: "Connections", label: "back to the workspace", keys: "Esc", send: esc, when: ["connections"] },
+
+  { group: "Filter", label: "type to filter", keys: "abc", when: ["filter"] },
+  { group: "Filter", label: "choose", keys: "↑↓  ^n ^p", when: ["filter"] },
+  { group: "Filter", label: "connect", keys: "⏎", send: "\r", when: ["filter"] },
+  { group: "Filter", label: "clear the filter", keys: "Esc", send: esc, when: ["filter"] },
 
   { group: "Password", label: "connect and store it", keys: "⏎", send: "\r", when: ["password"] },
   { group: "Password", label: "cancel", keys: "Esc", send: esc, when: ["password"] },

@@ -97,6 +97,7 @@ const finderRows = 10;
 const connectionHints: Hint[] = [
   ["␣", "menu"],
   ["↑↓", "choose"],
+  ["/", "filter"],
   ["⏎", "connect"],
   ["r", "reload"],
   ["^q", "quit"],
@@ -159,6 +160,7 @@ export class App {
 
   private resolution: Resolution | null = null;
   private connectionIndex = 0;
+  private connectionFilter: string | null = null;
   private connected: { connection: ResolvedConnection; db: Database } | null = null;
   private tables: Rows | null = null;
   private tableIndex = 0;
@@ -362,7 +364,7 @@ export class App {
 
   private keyContext(): KeyContext {
     if (this.overlay) return this.overlay.kind;
-    if (this.screen === "connections") return this.prompt ? "password" : this.confirmingDenies || this.confirmingForget ? "confirm" : "connections";
+    if (this.screen === "connections") return this.prompt ? "password" : this.confirmingDenies || this.confirmingForget ? "confirm" : this.connectionFilter !== null ? "filter" : "connections";
     if (this.focus === "editor") return this.popup ? "completion" : this.modal.mode === "normal" ? "normal" : "insert";
     if (this.focus === "tables") return "tables";
     if (this.detail) return "detail";
@@ -405,7 +407,7 @@ export class App {
   private async reload(): Promise<void> {
     this.resolution = await this.options.resolve();
     this.useEditor(this.resolution.editor);
-    this.connectionIndex = Math.min(this.connectionIndex, Math.max(0, this.resolution.connections.length - 1));
+    this.connectionIndex = Math.min(this.connectionIndex, Math.max(0, this.shownConnections.length - 1));
     this.renderAll();
     await this.refreshPasswordSources().catch(() => {});
     this.denies = await this.checkDenies();
@@ -974,20 +976,23 @@ export class App {
       else this.renderConnections();
       return;
     }
-    const count = this.resolution?.connections.length ?? 0;
+    if (this.connectionFilter !== null) return this.filterKey(key, this.connectionFilter);
+    const count = this.shownConnections.length;
     const step = listStep(key);
     if (step !== 0) {
       this.connectionIndex = clamp(this.connectionIndex + step, 0, Math.max(0, count - 1));
       this.renderConnections();
     } else if (key.name === "return") {
-      const connection = this.resolution?.connections[this.connectionIndex];
+      const connection = this.shownConnections[this.connectionIndex];
       if (connection) void this.connect(connection);
+    } else if (typed(key) === "/") {
+      this.setConnectionFilter("");
     } else if (key.name === "r") {
       this.reload().catch((e: unknown) => this.say(`could not reload: ${e instanceof Error ? e.message : String(e)}`, "error"));
     } else if (key.name === "escape" && this.connected) {
       this.showScreen("workspace");
     } else if (key.name === "f" && !key.shift && key.sequence === "f") {
-      const c = this.resolution?.connections[this.connectionIndex];
+      const c = this.shownConnections[this.connectionIndex];
       if (c && this.passwordSources.get(c.name) === "keyring") {
         this.confirmingForget = true;
         this.renderConnections();
@@ -996,6 +1001,40 @@ export class App {
       this.confirmingDenies = true;
       this.renderConnections();
     }
+  }
+
+  private filterKey(key: KeyEvent, filter: string): void {
+    const count = this.shownConnections.length;
+    if (key.name === "escape") return this.setConnectionFilter(null);
+    if (key.name === "return") {
+      const connection = this.shownConnections[this.connectionIndex];
+      if (!connection) return;
+      this.setConnectionFilter(null, connection);
+      return void this.connect(connection);
+    }
+    if (key.name === "up" || (key.ctrl && key.name === "p")) this.connectionIndex = Math.max(0, this.connectionIndex - 1);
+    else if (key.name === "down" || (key.ctrl && key.name === "n")) this.connectionIndex = clamp(this.connectionIndex + 1, 0, Math.max(0, count - 1));
+    else if (key.name === "backspace") return this.setConnectionFilter([...filter].slice(0, -1).join(""));
+    else {
+      const char = printable(key);
+      if (char === null || char === " ") return;
+      return this.setConnectionFilter(filter + char);
+    }
+    this.renderConnections();
+  }
+
+  private setConnectionFilter(filter: string | null, keep?: ResolvedConnection): void {
+    const selected = keep ?? this.shownConnections[this.connectionIndex];
+    this.connectionFilter = filter;
+    const index = filter === null && selected ? this.shownConnections.indexOf(selected) : 0;
+    this.connectionIndex = Math.max(0, index);
+    this.renderConnections();
+    this.renderStatus();
+  }
+
+  private get shownConnections(): ResolvedConnection[] {
+    const connections = this.resolution?.connections ?? [];
+    return this.connectionFilter ? fuzzyFilter(this.connectionFilter, connections, (c) => c.name) : connections;
   }
 
   private promptKey(key: KeyEvent): void {
@@ -1019,7 +1058,7 @@ export class App {
   }
 
   private async forgetPassword(): Promise<void> {
-    const c = this.resolution?.connections[this.connectionIndex];
+    const c = this.shownConnections[this.connectionIndex];
     if (!c || c.target.kind !== "ready" || c.target.params.password !== null) return;
     try {
       await this.keyring.forget(keyringKey(c.target.params));
@@ -1382,16 +1421,18 @@ export class App {
   }
 
   private renderConnections(): void {
-    const connections = this.resolution?.connections ?? [];
+    const all = this.resolution?.connections ?? [];
+    const connections = this.shownConnections;
+    const filter = this.connectionFilter;
     this.listLabel.content = sectionLabel("CONNECTIONS", this.screen === "connections" && !this.prompt);
     this.inspectLabel.content = sectionLabel("DETAILS", this.prompt !== null);
-    if (connections.length === 0) {
+    if (all.length === 0) {
       this.listText.content = styled([fg(theme.muted)("No connections.\n\nAdd .kowari.toml to the repo,\nor ~/.config/kowari/connections.toml")]);
       this.inspectText.content = this.problemsText();
       return;
     }
     const fixedColumns = 4 + 2 + 14 + "approve-writes".length;
-    const longestName = Math.max("Name".length, ...connections.map((c) => c.name.length));
+    const longestName = Math.max("Name".length, ...all.map((c) => c.name.length));
     const maxListWidth = Math.max(fixedColumns + 12, Math.floor(this.renderer.width * 0.6));
     this.listBox.width = Math.min(maxListWidth, longestName + fixedColumns + 4);
     const nameWidth = Math.max(8, Math.min(longestName, maxListWidth - 4 - fixedColumns));
@@ -1405,7 +1446,16 @@ export class App {
       const row: Line = [marker, active, name, fg(environmentColor[c.environment])(c.environment.padEnd(14)), fg(levelColor[c.agent])(c.agent)];
       return selected ? paint(row, this.listBox.width, theme.selection) : row;
     });
-    this.listText.content = styled(joinLines([header, ...rows]));
+    const filterLine: Line[] =
+      filter === null
+        ? []
+        : [[fg(theme.accent)(" / "), fg(theme.text)(filter), bg(theme.accent)(" "), fg(theme.muted)(`  ${connections.length} of ${all.length}`)], []];
+    const empty: Line[] = rows.length === 0 ? [[fg(theme.muted)("     no connection matches")]] : [];
+    this.listText.content = styled(joinLines([...filterLine, header, ...rows, ...empty]));
+    if (connections.length === 0) {
+      this.inspectText.content = this.problemsText();
+      return;
+    }
     this.inspectText.content = this.prompt
       ? this.promptText(this.prompt)
       : this.confirmingDenies
@@ -1712,7 +1762,8 @@ export class App {
   private statusContext(): string {
     if (this.screen === "connections") {
       const count = this.resolution?.connections.length ?? 0;
-      return `${count} ${count === 1 ? "connection" : "connections"}`;
+      const shown = this.connectionFilter === null ? "" : `${this.shownConnections.length} of `;
+      return `${shown}${count} ${count === 1 ? "connection" : "connections"}`;
     }
     if (this.focus === "tables") {
       const row = this.tables?.rows[this.tableIndex];
