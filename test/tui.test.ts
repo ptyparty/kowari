@@ -54,6 +54,7 @@ function connection(name: string, environment: ResolvedConnection["environment"]
     agent: "read-only",
     agentNote: null,
     agentSet: true,
+    initSql: null,
     target: ready
       ? { kind: "ready", params: { host: u.hostname, port: Number(u.port), database: db.name, user: u.username, password, sslmode: "prefer", sslrootcert: null } }
       : { kind: "unavailable", reason: "APP_DB_PORT not set" },
@@ -412,6 +413,24 @@ describe("kowari TUI", () => {
     s.mockInput.pressEnter({ ctrl: true });
     const frame = await until(s, (f) => f.includes("RESULTS  ·  error"));
     expect(frame).toContain('column "nope" does not exist');
+  });
+
+  test("runs the connection's init_sql on connect, and a failing one stops the connection", async () => {
+    const s = await open([
+      { ...connection("tuned", "local"), initSql: "set application_name to 'tuned'; set extra_float_digits to 1" },
+      { ...connection("broken", "local"), initSql: "set no_such_setting to 1" },
+    ]);
+    await connectFirst(s);
+    await s.mockInput.typeText("select current_setting('application_name') as app, current_setting('extra_float_digits') as digits");
+    s.mockInput.pressEnter({ ctrl: true });
+    const frame = await until(s, (f) => f.includes("1 row"));
+    expect(frame).toMatch(/tuned\s+1/);
+
+    s.mockInput.pressKey("o", { ctrl: true });
+    await until(s, (f) => f.includes("CONNECTIONS"));
+    s.mockInput.pressArrow("down");
+    s.mockInput.pressEnter();
+    expect(await until(s, (f) => f.includes("could not connect to broken"))).toContain("init_sql failed");
   });
 
   test("a production connection says so in the banner", async () => {

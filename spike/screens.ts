@@ -43,6 +43,7 @@ const connection = (name: string, environment: ResolvedConnection["environment"]
   agent,
   agentNote: null,
   agentSet: true,
+  initSql: null,
   target: { kind: "ready", params },
 });
 const resolution: Resolution = {

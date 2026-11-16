@@ -16,7 +16,7 @@ export class Database {
     private readonly conn: ReservedSql,
   ) {}
 
-  static async open(params: ConnectionParams): Promise<Database> {
+  static async open(params: ConnectionParams, initSql: string | null = null): Promise<Database> {
     const sql = postgres({
       ...driverOptions(params),
       max: 1,
@@ -25,7 +25,14 @@ export class Database {
       connection: { application_name: "kowari" },
     });
     try {
-      return new Database(sql, await sql.reserve());
+      const conn = await sql.reserve();
+      try {
+        if (initSql !== null) await conn.unsafe(initSql);
+      } catch (e) {
+        conn.release();
+        throw new Error(`init_sql failed: ${e instanceof Error ? e.message : String(e)}`);
+      }
+      return new Database(sql, conn);
     } catch (e) {
       await sql.end({ timeout: 1 });
       throw e;

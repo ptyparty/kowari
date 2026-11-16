@@ -24,7 +24,7 @@ export type UserConfig = {
   localHosts: string[];
 };
 
-export type UserConnection = { definition: Definition; agent: AgentLevel; agentSet: boolean; environment: Environment };
+export type UserConnection = { definition: Definition; agent: AgentLevel; agentSet: boolean; environment: Environment; initSql: string | null };
 
 export type RepoConfig = { connections: Map<string, Definition> };
 
@@ -40,10 +40,11 @@ export function parseUserConfig(text: string, source: string): Parsed<UserConfig
 
   for (const [name, raw] of tableEntries(doc.connections, `${source}: connections`, problems)) {
     const where = `${source}: connections.${name}`;
-    const definition = parseDefinition(raw, where, problems, ["agent", "environment"]);
+    const definition = parseDefinition(raw, where, problems, ["agent", "environment", "init_sql"]);
     const agent = raw.agent === undefined ? "none" : parseLevel(raw.agent, `${where}.agent`, problems);
     const environment = raw.environment === undefined ? "production" : parseEnvironment(raw.environment, `${where}.environment`, problems);
-    if (definition) connections.set(name, { definition, agent, agentSet: raw.agent !== undefined, environment });
+    const initSql = parseInitSql(raw.init_sql, `${where}.init_sql`, problems);
+    if (definition) connections.set(name, { definition, agent, agentSet: raw.agent !== undefined, environment, initSql });
   }
 
   for (const [identity, raw] of tableEntries(doc.repos, `${source}: repos`, problems)) {
@@ -74,7 +75,10 @@ export function parseRepoConfig(text: string, source: string): Parsed<RepoConfig
     if (raw.environment !== undefined) {
       problems.push(`${where}.environment is ignored: a repo connection is local when its host is local, and production otherwise`);
     }
-    const definition = parseDefinition(raw, where, problems, ["agent", "environment"]);
+    if (raw.init_sql !== undefined) {
+      problems.push(`${where}.init_sql is ignored: SQL to run on connect is set in your own config, not a repo's`);
+    }
+    const definition = parseDefinition(raw, where, problems, ["agent", "environment", "init_sql"]);
     if (definition) connections.set(name, definition);
   }
 
@@ -162,6 +166,13 @@ function parseGrant(value: unknown, where: string, problems: string[]): Grant | 
     return { agent, hosts: hosts.map((h) => h.toLowerCase()) };
   }
   problems.push(`${where} should be an agent level or { agent = ..., hosts = [...] }`);
+  return null;
+}
+
+function parseInitSql(value: unknown, where: string, problems: string[]): string | null {
+  if (value === undefined) return null;
+  if (typeof value === "string") return value.trim() === "" ? null : value;
+  problems.push(`${where} should be a string`);
   return null;
 }
 

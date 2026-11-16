@@ -75,6 +75,8 @@ local-ro = "read-only"
 
 A connection's fields are `host`, `port`, `database`, `user`, `password`, `sslmode` and `sslrootcert`, with Postgres's defaults for any left out. Without a `password`, the TUI asks for one and keeps it in your system keyring.
 
+A connection in your own config can also have `init_sql`, which the TUI runs each time it connects (`init_sql = "set search_path to app, public"`). If it fails, the connection fails. Claude's connections never run it, and a repo's `.kowari.toml` can't set it.
+
 Grants are keyed by the repo's origin remote and the connection's name. Claude's level on each connection is one of:
 
 | Level | What Claude can do |

@@ -31,6 +31,7 @@ export type ResolvedConnection = {
   agent: AgentLevel;
   agentNote: string | null;
   agentSet: boolean;
+  initSql: string | null;
   target: { kind: "ready"; params: ConnectionParams } | { kind: "unavailable"; reason: string };
 };
 
@@ -79,6 +80,7 @@ export async function resolveConnections(options: ResolveOptions): Promise<Resol
       agent: entry.agent,
       agentNote: null,
       agentSet: entry.agentSet,
+      initSql: entry.initSql,
       target: resolveTarget(entry.definition, lookup, path.dirname(userPath)),
     });
   }
@@ -93,7 +95,7 @@ export async function resolveConnections(options: ResolveOptions): Promise<Resol
     const { agent, agentNote } = applyGrant(grant, target, localHosts);
     const host = target.kind === "ready" ? target.params.host : resolvedHost(definition, lookup);
     const environment = host !== null && isLocal(localHosts, host) ? "local" : "production";
-    connections.push({ name, source: "repo", environment, agent, agentNote, agentSet: grant !== undefined, target });
+    connections.push({ name, source: "repo", environment, agent, agentNote, agentSet: grant !== undefined, initSql: null, target });
   }
 
   for (const name of exact ? grants.keys() : []) {

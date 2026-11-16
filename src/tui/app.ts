@@ -39,7 +39,7 @@ const selectionFg = RGBA.fromHex(theme.text);
 
 export type AppOptions = {
   resolve: () => Promise<Resolution>;
-  open?: (params: ConnectionParams) => Promise<Database>;
+  open?: (params: ConnectionParams, initSql: string | null) => Promise<Database>;
   keyring?: Keyring;
   claudeSettings?: string;
   setTitle?: (title: string) => void;
@@ -1109,7 +1109,7 @@ export class App {
 
     let db: Database;
     try {
-      db = await (this.options.open ? this.options.open(params) : Database.open(params));
+      db = await (this.options.open ? this.options.open(params, connection.initSql) : Database.open(params, connection.initSql));
     } catch (e) {
       if (attempt !== this.connectAttempt) return;
       const message = e instanceof Error ? e.message : String(e);

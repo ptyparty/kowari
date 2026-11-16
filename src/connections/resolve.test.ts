@@ -200,6 +200,19 @@ local-ro = "read-only"
     ]);
   });
 
+  test("init_sql comes from your config only", async () => {
+    const dir = await repo("initsql", "git@github.com:exfresso/initsql.git", {
+      ".kowari.toml": `[connections.local]\nhost = "localhost"\ninit_sql = "set role postgres"\n`,
+    });
+    const resolution = await resolve(dir, `[connections.mine]\nhost = "db"\ninit_sql = "set bytea_output to 'escape'"\n\n[connections.blank]\nhost = "db"\ninit_sql = " "\n\n[connections.odd]\nhost = "db"\ninit_sql = 1\n`);
+    const byName = Object.fromEntries(resolution.connections.map((c) => [c.name, c.initSql]));
+    expect(byName).toEqual({ mine: "set bytea_output to 'escape'", blank: null, odd: null, local: null });
+    expect(resolution.problems).toEqual([
+      `${userConfigPath}: connections.odd.init_sql should be a string`,
+      ".kowari.toml: connections.local.init_sql is ignored: SQL to run on connect is set in your own config, not a repo's",
+    ]);
+  });
+
   test("owner wildcards grant, and an exact entry replaces the wildcard", async () => {
     const files = { ".kowari.toml": argusRepoFile, ".env": "ARGUS_DB_PORT=5\nARGUS_RO_PASSWORD=x\n" };
     const wild = await repo("wild", "https://github.com/exfresso/wild", files);
