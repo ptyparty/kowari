@@ -139,6 +139,8 @@ export const bindings: Binding[] = [
   { group: "Results", label: "previous match", keys: "N", send: "N", when: ["grid"] },
   { group: "Results", label: "clear the search", keys: "Esc", send: esc, when: ["grid"] },
   { group: "Results", label: "copy cell, row", keys: "y Y", when: ["grid"] },
+  { group: "Results", label: "select a block of cells", keys: "V", send: "V", when: ["grid"] },
+  { group: "Results", label: "copy the block, its whole rows", keys: "y Y", when: ["grid"] },
   { group: "Cell", label: "scroll", keys: "↑↓  jk", when: ["detail"] },
   { group: "Cell", label: "close", keys: "Esc  q", send: esc, when: ["detail"] },
 

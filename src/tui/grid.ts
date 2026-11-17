@@ -63,7 +63,23 @@ export function searchCells(result: Rows, query: string): CellAt[] {
 
 export type GridSearch = { query: string; at: (row: number, col: number) => boolean };
 
-export function layoutGrid(result: Rows, cursor: GridCursor, width: number, height: number, search: GridSearch | null = null): GridLayout {
+export type GridBlock = { rows: [number, number]; cols: [number, number] };
+
+export function blockFrom(anchor: { row: number; col: number }, cursor: GridCursor): GridBlock {
+  return {
+    rows: [Math.min(anchor.row, cursor.row), Math.max(anchor.row, cursor.row)],
+    cols: [Math.min(anchor.col, cursor.col), Math.max(anchor.col, cursor.col)],
+  };
+}
+
+export function layoutGrid(
+  result: Rows,
+  cursor: GridCursor,
+  width: number,
+  height: number,
+  search: GridSearch | null = null,
+  block: GridBlock | null = null,
+): GridLayout {
   const widths = columnWidths(result);
   const total = widths.length;
   const room = width - gutter;
@@ -101,7 +117,8 @@ export function layoutGrid(result: Rows, cursor: GridCursor, width: number, heig
       const value = row[col];
       const text = pad(flat(displayValue(value)), widths[col]!);
       const color = value === null || value === undefined ? theme.faint : theme.text;
-      const chunks = highlighted(text, search?.at(r, col) ? search.query : "", color);
+      const inBlock = block !== null && r >= block.rows[0] && r <= block.rows[1] && col >= block.cols[0] && col <= block.cols[1];
+      const chunks = inBlock ? [bg(theme.accent)(fg(theme.background)(text))] : highlighted(text, search?.at(r, col) ? search.query : "", color);
       line.push(...(selected && col === fixed.col ? chunks.map((chunk) => bold(underline(chunk))) : chunks));
     });
     line.push(...rightMark("›"));

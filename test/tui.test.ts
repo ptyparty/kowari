@@ -653,6 +653,34 @@ describe("kowari TUI", () => {
     expect(frame).toMatch(/1\s+booked\s+booked/);
   });
 
+  test("V selects a block of cells; y copies its columns of each row, Y its whole rows, and Esc drops it", async () => {
+    const s = await open([connection("local", "local")]);
+    await connectFirst(s);
+    await s.mockInput.typeText("select id, status, 'x' as third from shipment order by id");
+    s.mockInput.pressEnter({ ctrl: true });
+    await until(s, (f) => f.includes("2 rows"));
+    s.mockInput.pressTab();
+    s.mockInput.pressKey("V", { shift: true });
+    await until(s, (f) => f.includes("results · visual"));
+    s.mockInput.pressArrow("right");
+    s.mockInput.pressArrow("down");
+    s.mockInput.pressKey("y");
+    await until(s, (f) => f.includes("copied 2 rows × 2 columns"));
+    expect(copies.at(-1)).toBe("1\tbooked\n2\t");
+    expect(s.captureCharFrame()).not.toContain("visual");
+
+    s.mockInput.pressKey("V", { shift: true });
+    s.mockInput.pressArrow("up");
+    s.mockInput.pressKey("Y", { shift: true });
+    await until(s, (f) => f.includes("copied 2 rows") && !f.includes("×"));
+    expect(copies.at(-1)).toBe("1\tbooked\tx\n2\t\tx");
+
+    s.mockInput.pressKey("V", { shift: true });
+    await until(s, (f) => f.includes("results · visual"));
+    s.mockInput.pressEscape();
+    await until(s, (f) => !f.includes("results · visual"));
+  });
+
   test("y copies the cell and Y the row as one tab-separated line", async () => {
     const s = await open([connection("local", "local")]);
     await connectFirst(s);

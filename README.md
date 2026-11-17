@@ -41,7 +41,7 @@ Every statement you run in the TUI goes into a history in `$XDG_STATE_HOME/kowar
 - Connection screen: `↑`/`↓` choose · Enter connect · `r` reload · `/` filters the list by name as you type, fuzzily like fzf (`↑`/`↓` or Ctrl-N/Ctrl-P choose, Enter connects, Esc clears).
 - Everywhere in the workspace: Ctrl-Enter or F5 run the statement under the cursor · Ctrl-R search the history · Tab switch pane · Ctrl-C cancel · Ctrl-Q quit.
 - Editor: helix keys, or vi keys with `editor = "vi"` at the top of your config, with Ctrl-Space to complete in insert mode, `/` to search the SQL (`n`/`N` for the next and previous match), and `:` for a command line, where `:q` quits.
-- Results: `hjkl` or arrows move · Enter opens the cell · `/` searches the cells, highlighting the matches (`n`/`N` step through them, Esc clears) · `y` copies the cell and `Y` the row.
+- Results: `hjkl` or arrows move · Enter opens the cell · `/` searches the cells, highlighting the matches (`n`/`N` step through them, Esc clears) · `y` copies the cell and `Y` the row · `V` starts selecting a block of cells, which the cursor then stretches; `y` copies the block's columns of each of its rows and `Y` its whole rows, one tab-separated line per row, and Esc drops the selection.
 
 Inside komux, kowari tells komux its keys for where you are, so komux's palette can list and run them.
 

@@ -32,7 +32,7 @@ import { Database, type Run } from "./database.ts";
 import { Helix } from "./helix.ts";
 import { Vi } from "./vi.ts";
 import { defaultHistoryPath, loadHistory, oneLine, recordHistory, searchHistory, type HistoryEntry } from "./history.ts";
-import { clamp, layoutGrid, lineWidth, moveCursor, paint, searchCells, type CellAt, type GridCursor, type Line, type Rows } from "./grid.ts";
+import { blockFrom, clamp, layoutGrid, lineWidth, moveCursor, paint, searchCells, type CellAt, type GridCursor, type Line, type Rows } from "./grid.ts";
 import { groupsFor, helpContexts, menuAction, opensMenu, menuEntries, menuGroups, type KeyContext, type MenuAction } from "./keys.ts";
 import { fuzzyFilter } from "./match.ts";
 import type { EditorPort, ModalEditor, Mode } from "./modal.ts";
@@ -161,6 +161,7 @@ export class App {
   private resolution: Resolution | null = null;
   private connectionIndex = 0;
   private connectionFilter: string | null = null;
+  private gridAnchor: { row: number; col: number } | null = null;
   private connected: { connection: ResolvedConnection; db: Database } | null = null;
   private tables: Rows | null = null;
   private tableIndex = 0;
@@ -785,8 +786,19 @@ export class App {
     const rows = this.gridRows;
     const values = rows?.rows[this.grid.row];
     if (!rows || !values) return;
-    const text = row ? values.map(tsvField).join("\t") : isNull(values[this.grid.col]) ? "" : detailText(values[this.grid.col]);
     const copy = this.options.copy ?? ((t: string) => this.renderer.copyToClipboardOSC52(t));
+    if (this.gridAnchor) {
+      const block = blockFrom(this.gridAnchor, this.grid);
+      const [first, last] = row ? [0, rows.columns.length - 1] : block.cols;
+      const lines = rows.rows.slice(block.rows[0], block.rows[1] + 1).map((r) => r.slice(first, last + 1).map(tsvField).join("\t"));
+      this.gridAnchor = null;
+      this.renderResults();
+      const count = lines.length;
+      if (copy(lines.join("\n"))) this.say(`copied ${count} ${count === 1 ? "row" : "rows"}${row ? "" : ` × ${last - first + 1} ${last === first ? "column" : "columns"}`}`, "info");
+      else this.say("could not copy: the terminal does not take OSC 52 copies", "error");
+      return;
+    }
+    const text = row ? values.map(tsvField).join("\t") : isNull(values[this.grid.col]) ? "" : detailText(values[this.grid.col]);
     if (copy(text)) this.say(row ? `copied row ${this.grid.row + 1}` : `copied ${rows.columns[this.grid.col]?.name ?? "the cell"} from row ${this.grid.row + 1}`, "info");
     else this.say("could not copy: the terminal does not take OSC 52 copies", "error");
   }
@@ -1166,6 +1178,17 @@ export class App {
     } else if (typed(key) === "y" || typed(key) === "Y") {
       key.preventDefault();
       this.copyCell(typed(key) === "Y");
+    } else if (typed(key) === "V" || typed(key) === "v") {
+      key.preventDefault();
+      this.gridAnchor = this.gridAnchor ? null : { row: this.grid.row, col: this.grid.col };
+      this.message = null;
+      this.renderResults();
+      this.renderStatus();
+    } else if (key.name === "escape" && this.gridAnchor) {
+      key.preventDefault();
+      this.gridAnchor = null;
+      this.renderResults();
+      this.renderStatus();
     } else if (key.name === "escape" && this.gridSearch !== "") {
       key.preventDefault();
       this.gridSearch = "";
@@ -1338,6 +1361,7 @@ export class App {
       void this.refreshTables(db).then(() => this.refreshCatalog(db));
     }
     this.grid = { row: 0, col: 0, top: 0, left: 0 };
+    this.gridAnchor = null;
     this.detail = null;
     this.gridSearch = "";
     this.message = null;
@@ -1746,7 +1770,14 @@ export class App {
       return;
     }
     const matches = this.gridSearch === "" ? null : this.searchMatches(rows, this.gridSearch);
-    const laid = layoutGrid(rows, this.grid, width, height, matches ? { query: matches.query, at: (row, col) => matches.at.has(`${row}:${col}`) } : null);
+    const laid = layoutGrid(
+      rows,
+      this.grid,
+      width,
+      height,
+      matches ? { query: matches.query, at: (row, col) => matches.at.has(`${row}:${col}`) } : null,
+      this.gridAnchor ? blockFrom(this.gridAnchor, this.grid) : null,
+    );
     this.grid = laid.cursor;
     if (laid.first > 0 || laid.last < laid.total - 1) {
       label(fg(theme.text)(resultSummary(rows)), fg(theme.muted)(`columns ${laid.first + 1}–${laid.last + 1} of ${laid.total}`), fg(theme.muted)(formatMs(run.ms)));
@@ -1770,7 +1801,8 @@ export class App {
       return row ? `tables · ${row[0]}.${row[1]}` : "tables";
     }
     if (this.focus === "results" && this.run?.result.kind === "rows" && this.run.result.rows.length > 0) {
-      return `results · row ${(this.grid.row + 1).toLocaleString("en-US")} · ${this.run.result.columns[this.grid.col]?.name ?? ""}`;
+      const visual = this.gridAnchor ? "visual · " : "";
+      return `results · ${visual}row ${(this.grid.row + 1).toLocaleString("en-US")} · ${this.run.result.columns[this.grid.col]?.name ?? ""}`;
     }
     return paneLabel[this.focus];
   }
